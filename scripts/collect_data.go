@@ -39,10 +39,10 @@ type MangaDexResponse struct {
 			Description struct {
 				En string `json:"en"`
 			} `json:"description"`
-			Status           string   `json:"status"`
-			Year             int      `json:"year"`
-			LastChapter      string   `json:"lastChapter"`
-			ContentRating    string   `json:"contentRating"`
+			Status           string `json:"status"`
+			Year             int    `json:"year"`
+			LastChapter      string `json:"lastChapter"`
+			ContentRating    string `json:"contentRating"`
 			Tags             []struct {
 				Attributes struct {
 					Name struct {
@@ -51,14 +51,18 @@ type MangaDexResponse struct {
 				} `json:"attributes"`
 			} `json:"tags"`
 		} `json:"attributes"`
+
+		// FIXED: Relationships now support both author and cover_art
 		Relationships []struct {
 			Type       string `json:"type"`
 			Attributes struct {
-				Name string `json:"name"`
+				Name     string `json:"name,omitempty"`     // for author
+				FileName string `json:"fileName,omitempty"` // for cover_art
 			} `json:"attributes,omitempty"`
 		} `json:"relationships"`
 	} `json:"data"`
 }
+
 
 func main() {
 	log.Println("╔════════════════════════════════════════════════════════╗")
@@ -332,6 +336,19 @@ func fetchFromMangaDex(limit int) []Manga {
 				description = description[:497] + "..."
 			}
 
+            // Cover URL (NEW)
+            coverURL := ""
+            for _, rel := range item.Relationships {
+                if rel.Type == "cover_art" && rel.Attributes.FileName != "" {
+                    coverURL = fmt.Sprintf(
+                        "https://uploads.mangadex.org/covers/%s/%s",
+                        item.ID,
+                        rel.Attributes.FileName,
+                    )
+                    break
+                }
+            }
+
 			// Create ID from title
 			id := strings.ToLower(title)
 			id = strings.ReplaceAll(id, " ", "-")
@@ -362,6 +379,7 @@ func fetchFromMangaDex(limit int) []Manga {
 				Status:        status,
 				TotalChapters: totalChapters,
 				Description:   description,
+				CoverURL:      coverURL,
 				Year:          item.Attributes.Year,
 				Source:        "mangadex",
 			}

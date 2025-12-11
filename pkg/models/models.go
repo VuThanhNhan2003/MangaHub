@@ -77,8 +77,8 @@ type SearchRequest struct {
 	Query  string `form:"query"`
 	Genre  string `form:"genre"`
 	Status string `form:"status"`
-	Limit  int    `form:"limit" binding:"max=100"`
-	Page   int    `form:"page" binding:"min=1"`
+	Limit  int    `form:"limit" `
+	Page   int    `form:"page" `
 }
 
 // AddToLibraryRequest represents request to add manga to library

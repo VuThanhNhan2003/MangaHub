@@ -50,6 +50,7 @@ func createTables(db *sql.DB) error {
 		total_chapters INTEGER NOT NULL,
 		description TEXT,
 		cover_url TEXT,
+		manga_url TEXT,
 		year INTEGER
 	);
 
@@ -124,6 +125,7 @@ func loadFromJSONFile(db *sql.DB, filename string) error {
 		TotalChapters int      `json:"total_chapters"`
 		Description   string   `json:"description"`
 		CoverURL      string   `json:"cover_url"`
+		MangaURL      string   `json:"manga_url"`
 		Year          int      `json:"year"`
 	}
 
@@ -133,8 +135,8 @@ func loadFromJSONFile(db *sql.DB, filename string) error {
 	}
 
 	stmt, err := db.Prepare(`
-		INSERT INTO manga (id, title, author, genres, status, total_chapters, description, cover_url, year)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO manga (id, title, author, genres, status, total_chapters, description, cover_url, manga_url, year)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -152,6 +154,7 @@ func loadFromJSONFile(db *sql.DB, filename string) error {
 			m.TotalChapters,
 			m.Description,
 			m.CoverURL,
+			m.MangaURL,
 			m.Year,
 		)
 		if err != nil {
@@ -175,6 +178,8 @@ func seedBasicData(db *sql.DB) error {
 		Status        string
 		TotalChapters int
 		Description   string
+		CoverURL      string
+		MangaURL      string
 		Year          int
 	}{
 		{
@@ -231,8 +236,8 @@ func seedBasicData(db *sql.DB) error {
 
 	// Insert manga data
 	stmt, err := db.Prepare(`
-		INSERT INTO manga (id, title, author, genres, status, total_chapters, description, year)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO manga (id, title, author, genres, status, total_chapters, description, cover_url, manga_url, year)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -248,6 +253,8 @@ func seedBasicData(db *sql.DB) error {
 			manga.Status,
 			manga.TotalChapters,
 			manga.Description,
+			manga.CoverURL,
+			manga.MangaURL,
 			manga.Year,
 		)
 		if err != nil {

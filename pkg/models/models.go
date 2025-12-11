@@ -21,6 +21,7 @@ type Manga struct {
 	TotalChapters int      `json:"total_chapters" db:"total_chapters"`
 	Description   string   `json:"description" db:"description"`
 	CoverURL      string   `json:"cover_url" db:"cover_url"`
+	MangaURL      string   `json:"manga_url" db:"manga_url"`
 	Year          int      `json:"year" db:"year"`
 }
 

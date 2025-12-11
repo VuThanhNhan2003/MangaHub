@@ -23,6 +23,7 @@ type Manga struct {
 	TotalChapters int      `json:"total_chapters"`
 	Description   string   `json:"description"`
 	CoverURL      string   `json:"cover_url"`
+	MangaURL      string   `json:"manga_url"`
 	Year          int      `json:"year"`
 	Source        string   `json:"source"` // manual, mangadex, web_scraping
 }
@@ -380,6 +381,7 @@ func fetchFromMangaDex(limit int) []Manga {
 				TotalChapters: totalChapters,
 				Description:   description,
 				CoverURL:      coverURL,
+				MangaURL:      "https://mangadex.org/title/" + item.ID,
 				Year:          item.Attributes.Year,
 				Source:        "mangadex",
 			}

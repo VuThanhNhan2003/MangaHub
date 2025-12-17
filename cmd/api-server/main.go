@@ -51,9 +51,9 @@ func main() {
 	// Create progress broadcast channel (for TCP server)
 	progressBroadcast := make(chan models.ProgressUpdate, 100)
 
-	// Initialize handlers
+	// Initialize handlers (without UDP for standalone API server)
 	userHandler := user.NewHandler(userService)
-	mangaHandler := manga.NewHandler(mangaRepo, progressBroadcast)
+	mangaHandler := manga.NewHandler(mangaRepo, progressBroadcast, nil)
 
 	// Initialize WebSocket hub
 	chatHub := ws.NewHub()

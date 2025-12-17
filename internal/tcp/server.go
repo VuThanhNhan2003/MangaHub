@@ -22,6 +22,8 @@ type Server struct {
 	clients   map[string]*Client
 	mutex     sync.RWMutex
 	broadcast chan models.ProgressUpdate
+	shutdown  chan struct{}
+	wg        sync.WaitGroup
 }
 
 func NewServer(port string) *Server {
@@ -29,6 +31,7 @@ func NewServer(port string) *Server {
 		port:      port,
 		clients:   make(map[string]*Client),
 		broadcast: make(chan models.ProgressUpdate, 100),
+		shutdown:  make(chan struct{}),
 	}
 }
 
@@ -42,18 +45,50 @@ func (s *Server) Start() error {
 	log.Printf("TCP Sync Server listening on %s", s.port)
 
 	// Start broadcast goroutine
+	s.wg.Add(1)
 	go s.handleBroadcasts()
 
 	// Accept connections
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
-			continue
-		}
+	go func() {
+		for {
+			select {
+			case <-s.shutdown:
+				listener.Close()
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					select {
+					case <-s.shutdown:
+						return
+					default:
+						log.Printf("Error accepting connection: %v", err)
+						continue
+					}
+				}
 
-		go s.handleConnection(conn)
+				s.wg.Add(1)
+				go s.handleConnection(conn)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// Shutdown gracefully shuts down the server
+func (s *Server) Shutdown() {
+	close(s.shutdown)
+	
+	// Close all client connections
+	s.mutex.Lock()
+	for _, client := range s.clients {
+		client.Conn.Close()
 	}
+	s.mutex.Unlock()
+	
+	s.wg.Wait()
+	log.Println("TCP server shut down gracefully")
 }
 
 // GetBroadcastChannel returns the broadcast channel
@@ -63,11 +98,13 @@ func (s *Server) GetBroadcastChannel() chan models.ProgressUpdate {
 
 // handleConnection handles individual client connections
 func (s *Server) handleConnection(conn net.Conn) {
+	defer s.wg.Done()
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 	
 	// Read authentication message
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	authData, err := reader.ReadBytes('\n')
 	if err != nil {
 		log.Printf("Error reading auth: %v", err)
@@ -82,7 +119,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Register client
+	if authMsg.UserID == "" {
+		log.Printf("Empty user_id in auth message")
+		return
+	}
+
+	// Register client with proper locking
 	clientID := fmt.Sprintf("%s_%d", authMsg.UserID, time.Now().UnixNano())
 	client := &Client{
 		Conn:   conn,
@@ -91,52 +133,71 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	s.mutex.Lock()
 	s.clients[clientID] = client
+	clientCount := len(s.clients)
 	s.mutex.Unlock()
 
-	log.Printf("Client connected: %s (UserID: %s)", clientID, authMsg.UserID)
+	log.Printf("Client connected: %s (UserID: %s) - Total clients: %d", clientID, authMsg.UserID, clientCount)
 
 	// Send confirmation
 	response := map[string]interface{}{
 		"status":  "connected",
 		"message": "Successfully connected to TCP sync server",
+		"client_id": clientID,
 	}
 	respData, _ := json.Marshal(response)
 	conn.Write(append(respData, '\n'))
 
 	// Keep connection alive and handle heartbeats
 	for {
-		// Set read deadline
-		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		
-		data, err := reader.ReadBytes('\n')
-		if err != nil {
-			break
-		}
+		select {
+		case <-s.shutdown:
+			return
+		default:
+			// Set read deadline
+			conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+			
+			data, err := reader.ReadBytes('\n')
+			if err != nil {
+				goto cleanup
+			}
 
-		// Handle heartbeat or other messages
-		var msg map[string]interface{}
-		if err := json.Unmarshal(data, &msg); err == nil {
-			if msgType, ok := msg["type"].(string); ok && msgType == "heartbeat" {
-				// Send heartbeat response
-				hbResp := map[string]string{"type": "heartbeat_ack"}
-				hbData, _ := json.Marshal(hbResp)
-				conn.Write(append(hbData, '\n'))
+			// Handle heartbeat or other messages
+			var msg map[string]interface{}
+			if err := json.Unmarshal(data, &msg); err == nil {
+				if msgType, ok := msg["type"].(string); ok && msgType == "heartbeat" {
+					// Send heartbeat response
+					hbResp := map[string]string{
+						"type": "heartbeat_ack",
+						"timestamp": fmt.Sprintf("%d", time.Now().Unix()),
+					}
+					hbData, _ := json.Marshal(hbResp)
+					conn.Write(append(hbData, '\n'))
+				}
 			}
 		}
 	}
 
-	// Remove client on disconnect
+cleanup:
+	// Remove client on disconnect with proper locking
 	s.mutex.Lock()
 	delete(s.clients, clientID)
+	remainingClients := len(s.clients)
 	s.mutex.Unlock()
 
-	log.Printf("Client disconnected: %s", clientID)
+	log.Printf("Client disconnected: %s - Remaining clients: %d", clientID, remainingClients)
 }
 
 // handleBroadcasts listens for progress updates and broadcasts them
 func (s *Server) handleBroadcasts() {
-	for update := range s.broadcast {
-		s.broadcastUpdate(update)
+	defer s.wg.Done()
+	
+	for {
+		select {
+		case <-s.shutdown:
+			return
+		case update := <-s.broadcast:
+			s.broadcastUpdate(update)
+		}
 	}
 }
 
@@ -161,19 +222,23 @@ func (s *Server) broadcastUpdate(update models.ProgressUpdate) {
 
 	// Send to all clients of this user
 	sentCount := 0
-	for _, client := range s.clients {
+	failedCount := 0
+	
+	for clientID, client := range s.clients {
 		if client.UserID == update.UserID {
 			client.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			_, err := client.Conn.Write(data)
 			if err != nil {
-				log.Printf("Error sending to client: %v", err)
+				log.Printf("Error sending to client %s: %v", clientID, err)
+				failedCount++
 			} else {
 				sentCount++
 			}
 		}
 	}
 
-	log.Printf("Broadcasted progress update to %d clients for user %s", sentCount, update.UserID)
+	log.Printf("Broadcasted progress update for user %s (manga: %s, ch: %d) - Sent: %d, Failed: %d", 
+		update.UserID, update.MangaID, update.Chapter, sentCount, failedCount)
 }
 
 // GetStats returns server statistics

@@ -6,18 +6,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"mangahub/internal/auth"
+	"mangahub/internal/udp"
 	"mangahub/pkg/models"
 )
 
 type Handler struct {
-	repo           *Repository
+	repo              *Repository
 	progressBroadcast chan models.ProgressUpdate
+	udpServer         *udp.Server
 }
 
-func NewHandler(repo *Repository, progressBroadcast chan models.ProgressUpdate) *Handler {
+func NewHandler(repo *Repository, progressBroadcast chan models.ProgressUpdate, udpServer *udp.Server) *Handler {
 	return &Handler{
-		repo:           repo,
+		repo:              repo,
 		progressBroadcast: progressBroadcast,
+		udpServer:         udpServer,
 	}
 }
 
@@ -34,6 +37,9 @@ func (h *Handler) SearchManga(c *gin.Context) {
 
 	if req.Limit <= 0 {
 		req.Limit = 20
+	}
+	if req.Limit > 100 {
+		req.Limit = 100
 	}
 	if req.Page <= 0 {
 		req.Page = 1
@@ -146,8 +152,30 @@ func (h *Handler) AddToLibrary(c *gin.Context) {
 		return
 	}
 
+	// Validate status
+	validStatuses := map[string]bool{
+		"reading": true, "completed": true, "plan-to-read": true,
+		"on-hold": true, "dropped": true,
+	}
+	if !validStatuses[req.Status] {
+		c.JSON(http.StatusBadRequest, models.Response{
+			Success: false,
+			Error:   "invalid status. must be: reading, completed, plan-to-read, on-hold, or dropped",
+		})
+		return
+	}
+
+	// Validate rating
+	if req.Rating < 0 || req.Rating > 10 {
+		c.JSON(http.StatusBadRequest, models.Response{
+			Success: false,
+			Error:   "rating must be between 0 and 10",
+		})
+		return
+	}
+
 	// Validate manga exists
-	_, err := h.repo.GetByID(req.MangaID)
+	manga, err := h.repo.GetByID(req.MangaID)
 	if err != nil {
 		if err == ErrMangaNotFound {
 			c.JSON(http.StatusNotFound, models.Response{
@@ -182,6 +210,17 @@ func (h *Handler) AddToLibrary(c *gin.Context) {
 		return
 	}
 
+	// Send UDP notification to user
+	if h.udpServer != nil {
+		notification := models.Notification{
+			Type:      "library_update",
+			MangaID:   req.MangaID,
+			Message:   "Added " + manga.Title + " to your library",
+			Timestamp: time.Now().Unix(),
+		}
+		h.udpServer.SendNotificationToUser(userID, notification)
+	}
+
 	c.JSON(http.StatusCreated, models.Response{
 		Success: true,
 		Message: "manga added to library",
@@ -198,6 +237,15 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.Response{
 			Success: false,
 			Error:   "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Validate chapter number
+	if req.Chapter < 0 {
+		c.JSON(http.StatusBadRequest, models.Response{
+			Success: false,
+			Error:   "chapter must be a positive number",
 		})
 		return
 	}
@@ -219,11 +267,15 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		return
 	}
 
-	// Validate chapter number
+	// Validate chapter number against total chapters
 	if req.Chapter > manga.TotalChapters {
 		c.JSON(http.StatusBadRequest, models.Response{
 			Success: false,
 			Error:   "chapter number exceeds total chapters",
+			Data: gin.H{
+				"requested_chapter": req.Chapter,
+				"total_chapters":    manga.TotalChapters,
+			},
 		})
 		return
 	}
@@ -244,7 +296,7 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		return
 	}
 
-	// Broadcast progress update via TCP
+	// Broadcast progress update via TCP (non-blocking)
 	if h.progressBroadcast != nil {
 		update := models.ProgressUpdate{
 			UserID:    userID,
@@ -252,11 +304,21 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 			Chapter:   req.Chapter,
 			Timestamp: time.Now().Unix(),
 		}
-		// Non-blocking send
 		select {
 		case h.progressBroadcast <- update:
 		default:
 		}
+	}
+
+	// Send UDP notification to user
+	if h.udpServer != nil {
+		notification := models.Notification{
+			Type:      "progress_update",
+			MangaID:   req.MangaID,
+			Message:   "Updated progress to chapter " + string(rune(req.Chapter)),
+			Timestamp: time.Now().Unix(),
+		}
+		h.udpServer.SendNotificationToUser(userID, notification)
 	}
 
 	c.JSON(http.StatusOK, models.Response{
@@ -265,6 +327,7 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		Data: gin.H{
 			"manga_id": req.MangaID,
 			"chapter":  req.Chapter,
+			"manga_title": manga.Title,
 		},
 	})
 }
@@ -273,6 +336,9 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 func (h *Handler) RemoveFromLibrary(c *gin.Context) {
 	userID := auth.GetUserID(c)
 	mangaID := c.Param("id")
+
+	// Get manga info before removing
+	manga, _ := h.repo.GetByID(mangaID)
 
 	if err := h.repo.RemoveFromLibrary(userID, mangaID); err != nil {
 		if err == ErrProgressNotFound {
@@ -287,6 +353,17 @@ func (h *Handler) RemoveFromLibrary(c *gin.Context) {
 			Error:   "failed to remove from library",
 		})
 		return
+	}
+
+	// Send UDP notification
+	if h.udpServer != nil && manga != nil {
+		notification := models.Notification{
+			Type:      "library_update",
+			MangaID:   mangaID,
+			Message:   "Removed " + manga.Title + " from your library",
+			Timestamp: time.Now().Unix(),
+		}
+		h.udpServer.SendNotificationToUser(userID, notification)
 	}
 
 	c.JSON(http.StatusOK, models.Response{

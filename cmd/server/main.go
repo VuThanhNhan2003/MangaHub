@@ -67,10 +67,6 @@ func main() {
 	// Create progress broadcast channel
 	progressBroadcast := make(chan models.ProgressUpdate, 100)
 
-	// Initialize handlers
-	userHandler := user.NewHandler(userService)
-	mangaHandler := manga.NewHandler(mangaRepo, progressBroadcast)
-
 	// Initialize WebSocket hub
 	chatHub := ws.NewHub()
 	go chatHub.Run()
@@ -78,12 +74,10 @@ func main() {
 
 	// Start TCP Server
 	tcpServer := tcp.NewServer(tcpPort)
-	go func() {
-		log.Printf("✅ TCP Sync Server starting on %s", tcpPort)
-		if err := tcpServer.Start(); err != nil {
-			log.Fatalf("❌ TCP server failed: %v", err)
-		}
-	}()
+	if err := tcpServer.Start(); err != nil {
+		log.Fatalf("❌ TCP server failed to start: %v", err)
+	}
+	log.Printf("✅ TCP Sync Server started on %s", tcpPort)
 
 	// Connect TCP broadcast to HTTP API
 	go func() {
@@ -94,12 +88,14 @@ func main() {
 
 	// Start UDP Server
 	udpServer := udp.NewServer(udpPort)
-	go func() {
-		log.Printf("✅ UDP Notification Server starting on %s", udpPort)
-		if err := udpServer.Start(); err != nil {
-			log.Fatalf("❌ UDP server failed: %v", err)
-		}
-	}()
+	if err := udpServer.Start(); err != nil {
+		log.Fatalf("❌ UDP server failed to start: %v", err)
+	}
+	log.Printf("✅ UDP Notification Server started on %s", udpPort)
+
+	// Initialize handlers WITH UDP server
+	userHandler := user.NewHandler(userService)
+	mangaHandler := manga.NewHandler(mangaRepo, progressBroadcast, udpServer)
 
 	// Start gRPC Server
 	go func() {
@@ -112,7 +108,7 @@ func main() {
 		server := grpcServer.NewServer(mangaRepo)
 		pb.RegisterMangaServiceServer(grpcSrv, server)
 
-		log.Printf("✅ gRPC Internal Service starting on %s", grpcPort)
+		log.Printf("✅ gRPC Internal Service started on %s", grpcPort)
 		if err := grpcSrv.Serve(lis); err != nil {
 			log.Fatalf("❌ gRPC server failed: %v", err)
 		}
@@ -207,7 +203,15 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("\n🛑 Shutting down MangaHub servers...")
+		log.Println("\n🛑 Shutting down MangaHub servers gracefully...")
+		
+		// Shutdown TCP server
+		tcpServer.Shutdown()
+		
+		// Close channels
+		close(progressBroadcast)
+		
+		log.Println("✅ All servers shut down successfully")
 		os.Exit(0)
 	}()
 
@@ -226,7 +230,7 @@ func main() {
 	log.Println("╚════════════════════════════════════════════════════════════╝")
 
 	// Start HTTP server
-	log.Printf("✅ HTTP API Server starting on %s\n", httpPort)
+	log.Printf("✅ HTTP API Server started on %s\n", httpPort)
 	if err := router.Run(httpPort); err != nil {
 		log.Fatalf("❌ Failed to start HTTP server: %v", err)
 	}

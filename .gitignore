@@ -1,0 +1,7 @@
+*.db
+/data/
+logs/
+*.log
+temp/
+*.json
+

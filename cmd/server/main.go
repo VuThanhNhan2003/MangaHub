@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -42,7 +44,14 @@ func main() {
 	log.Println("║           🚀 MangaHub Server Suite Starting...            ║")
 	log.Println("╚════════════════════════════════════════════════════════════╝")
 
+	// Ensure data directory exists
+	dataDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("❌ Failed to create data directory: %v", err)
+	}
+
 	// Initialize database
+	log.Printf("📊 Initializing database at: %s", dbPath)
 	db, err := database.InitDB(dbPath)
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize database: %v", err)
@@ -51,6 +60,7 @@ func main() {
 	log.Printf("✅ Database initialized: %s", dbPath)
 
 	// Seed data
+	log.Println("🌱 Seeding database...")
 	if err := database.SeedData(db); err != nil {
 		log.Printf("⚠️  Failed to seed data: %v", err)
 	} else {
@@ -73,6 +83,7 @@ func main() {
 	log.Println("✅ WebSocket Chat Hub initialized")
 
 	// Start TCP Server
+	log.Printf("🔄 Starting TCP Sync Server on %s...", tcpPort)
 	tcpServer := tcp.NewServer(tcpPort)
 	if err := tcpServer.Start(); err != nil {
 		log.Fatalf("❌ TCP server failed to start: %v", err)
@@ -86,22 +97,30 @@ func main() {
 		}
 	}()
 
-	// Start UDP Server
+	// Start UDP Server (in goroutine to avoid blocking)
+	log.Printf("📢 Starting UDP Notification Server on %s...", udpPort)
 	udpServer := udp.NewServer(udpPort)
-	if err := udpServer.Start(); err != nil {
-		log.Fatalf("❌ UDP server failed to start: %v", err)
-	}
+	go func() {
+		if err := udpServer.Start(); err != nil {
+			log.Fatalf("❌ UDP server failed to start: %v", err)
+		}
+	}()
+	// Give UDP server time to start
+	time.Sleep(100 * time.Millisecond)
 	log.Printf("✅ UDP Notification Server started on %s", udpPort)
 
 	// Initialize handlers WITH UDP server
 	userHandler := user.NewHandler(userService)
 	mangaHandler := manga.NewHandler(mangaRepo, progressBroadcast, udpServer)
 
-	// Start gRPC Server
+	// Start gRPC Server (with better error handling)
+	log.Printf("⚡ Starting gRPC Internal Service on %s...", grpcPort)
 	go func() {
 		lis, err := net.Listen("tcp", grpcPort)
 		if err != nil {
-			log.Fatalf("❌ gRPC listen failed: %v", err)
+			log.Printf("❌ gRPC listen failed: %v", err)
+			log.Printf("⚠️  gRPC service will not be available, but other services will continue")
+			return
 		}
 
 		grpcSrv := grpc.NewServer()
@@ -110,11 +129,12 @@ func main() {
 
 		log.Printf("✅ gRPC Internal Service started on %s", grpcPort)
 		if err := grpcSrv.Serve(lis); err != nil {
-			log.Fatalf("❌ gRPC server failed: %v", err)
+			log.Printf("❌ gRPC server error: %v", err)
 		}
 	}()
 
 	// Setup HTTP API Server
+	log.Println("🌐 Setting up HTTP API Server...")
 	router := gin.Default()
 
 	// CORS middleware
@@ -230,7 +250,11 @@ func main() {
 	log.Println("╚════════════════════════════════════════════════════════════╝")
 
 	// Start HTTP server
-	log.Printf("✅ HTTP API Server started on %s\n", httpPort)
+	log.Printf("🚀 Starting HTTP API Server on %s...", httpPort)
+	log.Println("✅ HTTP API Server started successfully!")
+	log.Println("📡 Server is ready to accept connections...")
+	log.Println()
+	
 	if err := router.Run(httpPort); err != nil {
 		log.Fatalf("❌ Failed to start HTTP server: %v", err)
 	}

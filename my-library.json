@@ -1,0 +1,31 @@
+{
+  "data": {
+    "count": 1,
+    "library": [
+      {
+        "manga": {
+          "author": "Oda Eiichiro",
+          "cover_url": "",
+          "description": "Monkey D. Luffy explores the Grand Line in search of One Piece to become the Pirate King.",
+          "genres": "[\"Action\",\"Adventure\",\"Comedy\",\"Drama\",\"Shounen\"]",
+          "id": "one-piece",
+          "manga_url": "",
+          "status": "ongoing",
+          "title": "One Piece",
+          "total_chapters": 1100,
+          "year": 1997
+        },
+        "progress": {
+          "current_chapter": 0,
+          "manga_id": "one-piece",
+          "rating": 0,
+          "started_at": "2025-12-18T09:41:52.3114854+07:00",
+          "status": "reading",
+          "updated_at": "2025-12-18T09:41:52.3114854+07:00",
+          "user_id": "ce88985f-3f4e-40eb-b0fb-dd2881da301a"
+        }
+      }
+    ]
+  },
+  "success": true
+}

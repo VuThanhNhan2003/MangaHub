@@ -1,7 +1,5 @@
-*.db
-/data/
-logs/
-*.log
-temp/
-*.json
-
+# SQLite
+/data/*.db
+*.sqlite
+*.sqlite3
+/data/*.json

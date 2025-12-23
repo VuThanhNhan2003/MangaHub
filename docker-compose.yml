@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  mangahub:
+    build: .
+    container_name: mangahub
+    ports:
+      - "8080:8080"       # HTTP + WebSocket
+      - "9090:9090"       # TCP
+      - "9091:9091/udp"   # UDP
+      - "9092:9092"       # gRPC
+    environment:
+      PORT: 8080
+      DB_PATH: /app/data/mangahub.db
+      TCP_PORT: ":9090"
+      UDP_PORT: ":9091"
+      GRPC_PORT: ":9092"
+      JWT_SECRET: dev-secret
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -100,14 +100,6 @@ func main() {
 		handleStats()
 	case "export":
 		handleExport()
-	case "db":
-		handleDB()
-	case "logs":
-		handleLogs()
-	case "profile":
-		handleProfile()
-	case "backup":
-		handleBackup()
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -122,10 +114,10 @@ func printUsage() {
 Commands:
   init                     Initialize configuration
   version                  Show version
-  auth <login|register>    Authentication
-  manga <search|info>      Search and view manga
-  library <list|add>       Manage your library
-  progress update          Update reading progress
+  auth <login|register>    Authentication (HTTP)
+  manga <search|info>      Search and view manga (HTTP/gRPC)
+  library <list|add>       Manage your library (HTTP)
+  progress update          Update reading progress (HTTP)
   sync <connect|monitor>   TCP synchronization
   notify <subscribe|send>  UDP notifications
   chat join                WebSocket chat
@@ -134,10 +126,6 @@ Commands:
   config show              View configuration
   stats overview           Reading statistics
   export library           Export data
-  db <check|stats>         Database operations
-  logs <errors|search>     View logs
-  profile <create|list>    Profile management
-  backup <create|restore>  Backup/restore data
   `)
 }
 
@@ -154,7 +142,7 @@ func cmdInit() {
 	config.Server.TCPPort = 9090
 	config.Server.UDPPort = 9091
 	config.Server.GRPCPort = 9092
-	config.Server.WebSocketPort = 9093
+	config.Server.WebSocketPort = 8080
 	config.Database.Path = filepath.Join(mangahubDir, "data.db")
 	config.Sync.AutoSync = true
 	config.Sync.ConflictResolution = "last_write_wins"
@@ -170,7 +158,7 @@ func cmdInit() {
 	fmt.Println("\nNext: mangahub auth register --username <user> --email <email>")
 }
 
-// ===== AUTH =====
+// ===== AUTH (UC-001, UC-002) - HTTP =====
 func handleAuth() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: mangahub auth <register|login|logout|status>")
@@ -194,7 +182,7 @@ func handleAuth() {
 		if config.User.Token == "" {
 			fmt.Println("Status: Not logged in")
 		} else {
-			fmt.Printf("Status: Logged in as %s\n", config.User.Username)
+			fmt.Printf("Status: Logged in as %s (UserID: %s)\n", config.User.Username, config.User.UserID)
 		}
 	}
 }
@@ -217,13 +205,14 @@ func cmdAuthRegister() {
 		"password": password,
 	}
 
+	fmt.Println("\n🔄 Sending registration request via HTTP...")
 	resp, err := makeRequest("POST", "/auth/register", data, "")
 	if err != nil {
 		fmt.Printf("✗ Registration failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("\n✓ Account created successfully!")
+	fmt.Println("✓ Account created successfully via HTTP!")
 	if respData, ok := resp["data"].(map[string]interface{}); ok {
 		fmt.Printf("  User ID: %s\n", respData["user_id"])
 		fmt.Printf("  Username: %s\n", respData["username"])
@@ -246,9 +235,10 @@ func cmdAuthLogin() {
 		"password": password,
 	}
 
+	fmt.Println("\n🔄 Authenticating via HTTP...")
 	resp, err := makeRequest("POST", "/auth/login", data, "")
 	if err != nil {
-		fmt.Printf("\n✗ Login failed: %v\n", err)
+		fmt.Printf("✗ Login failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -263,21 +253,34 @@ func cmdAuthLogin() {
 		}
 	}
 
-	fmt.Printf("\n✓ Welcome back, %s!\n", username)
+	fmt.Printf("✓ Welcome back, %s! (JWT token saved)\n", username)
+	fmt.Println("\n💡 Your session is now authenticated for HTTP, TCP, gRPC, and WebSocket")
 }
 
-// ===== MANGA =====
+// ===== MANGA (UC-003, UC-004) - HTTP & gRPC =====
 func handleManga() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: mangahub manga <search|info|list>")
+		fmt.Println("\nOptions:")
+		fmt.Println("  --use-grpc    Use gRPC instead of HTTP")
 		os.Exit(1)
 	}
 
+	useGRPC := hasFlag("--use-grpc")
+
 	switch os.Args[2] {
 	case "search":
-		cmdMangaSearch()
+		if useGRPC {
+			cmdMangaSearchGRPC()
+		} else {
+			cmdMangaSearch()
+		}
 	case "info":
-		cmdMangaInfo()
+		if useGRPC {
+			cmdMangaInfoGRPC()
+		} else {
+			cmdMangaInfo()
+		}
 	case "list":
 		cmdMangaList()
 	}
@@ -285,13 +288,18 @@ func handleManga() {
 
 func cmdMangaSearch() {
 	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub manga search <query>")
+		fmt.Println("Usage: mangahub manga search <query> [--use-grpc]")
 		os.Exit(1)
 	}
 
 	query := strings.Join(os.Args[3:], " ")
+	// Remove --use-grpc flag from query
+	query = strings.ReplaceAll(query, "--use-grpc", "")
+	query = strings.TrimSpace(query)
+
 	url := fmt.Sprintf("/manga?query=%s", query)
 
+	fmt.Printf("🔍 Searching via HTTP: %s\n", query)
 	resp, err := makeRequest("GET", url, nil, "")
 	if err != nil {
 		fmt.Printf("✗ Search failed: %v\n", err)
@@ -305,25 +313,77 @@ func cmdMangaSearch() {
 				return
 			}
 
-			fmt.Printf("\nFound %d results:\n\n", len(mangas))
+			fmt.Printf("\n✓ Found %d results via HTTP:\n\n", len(mangas))
 			for i, m := range mangas {
 				manga := m.(map[string]interface{})
 				fmt.Printf("%d. %s\n", i+1, manga["title"])
 				fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %.0f\n",
 					manga["id"], manga["author"], manga["status"], manga["total_chapters"])
 			}
-			fmt.Println("\nUse 'mangahub manga info <id>' for details")
+			fmt.Println("\n💡 Use 'mangahub manga info <id>' for details")
+			fmt.Println("💡 Add --use-grpc to search via gRPC instead")
 		}
+	}
+}
+
+func cmdMangaSearchGRPC() {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: mangahub manga search <query> --use-grpc")
+		os.Exit(1)
+	}
+
+	query := strings.Join(os.Args[3:], " ")
+	query = strings.ReplaceAll(query, "--use-grpc", "")
+	query = strings.TrimSpace(query)
+
+	fmt.Printf("🔍 Searching via gRPC: %s\n", query)
+
+	conn, err := grpc.NewClient(
+		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		fmt.Printf("✗ gRPC connection failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	client := pb.NewMangaServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.SearchManga(ctx, &pb.SearchRequest{
+		Query:  query,
+		Limit:  10,
+		Offset: 0,
+	})
+	if err != nil {
+		fmt.Printf("✗ gRPC request failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(resp.Mangas) == 0 {
+		fmt.Println("No results found")
+		return
+	}
+
+	fmt.Printf("\n✓ Found %d results via gRPC:\n\n", len(resp.Mangas))
+	for i, manga := range resp.Mangas {
+		fmt.Printf("%d. %s\n", i+1, manga.Title)
+		fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %d\n",
+			manga.Id, manga.Author, manga.Status, manga.TotalChapters)
 	}
 }
 
 func cmdMangaInfo() {
 	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub manga info <manga-id>")
+		fmt.Println("Usage: mangahub manga info <manga-id> [--use-grpc]")
 		os.Exit(1)
 	}
 
 	mangaID := os.Args[3]
+	
+	fmt.Printf("📖 Fetching manga info via HTTP: %s\n", mangaID)
 	resp, err := makeRequest("GET", "/manga/"+mangaID, nil, config.User.Token)
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
@@ -346,7 +406,7 @@ func cmdMangaInfo() {
 			}
 
 			if progress, ok := data["progress"].(map[string]interface{}); ok && progress != nil {
-				fmt.Println("\nYour Progress:")
+				fmt.Println("\n📚 Your Progress:")
 				fmt.Printf("  Status: %s | Chapter: %.0f",
 					progress["status"], progress["current_chapter"])
 				if rating, ok := progress["rating"].(float64); ok && rating > 0 {
@@ -356,9 +416,58 @@ func cmdMangaInfo() {
 			}
 		}
 	}
+	fmt.Println("\n💡 Add --use-grpc to fetch via gRPC instead")
+}
+
+func cmdMangaInfoGRPC() {
+	if len(os.Args) < 4 {
+		fmt.Println("Usage: mangahub manga info <manga-id> --use-grpc")
+		os.Exit(1)
+	}
+
+	mangaID := os.Args[3]
+
+	fmt.Printf("📖 Fetching manga info via gRPC: %s\n", mangaID)
+
+	conn, err := grpc.NewClient(
+		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		fmt.Printf("✗ gRPC connection failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	client := pb.NewMangaServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.GetManga(ctx, &pb.GetMangaRequest{MangaId: mangaID})
+	if err != nil {
+		fmt.Printf("✗ gRPC request failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n%s\n", resp.Title)
+	fmt.Println(strings.Repeat("=", len(resp.Title)))
+	fmt.Printf("ID: %s\n", resp.Id)
+	fmt.Printf("Author: %s\n", resp.Author)
+	fmt.Printf("Status: %s\n", resp.Status)
+	fmt.Printf("Chapters: %d\n", resp.TotalChapters)
+	if resp.Year > 0 {
+		fmt.Printf("Year: %d\n", resp.Year)
+	}
+	if len(resp.Genres) > 0 {
+		fmt.Printf("Genres: %s\n", strings.Join(resp.Genres, ", "))
+	}
+	if resp.Description != "" {
+		fmt.Printf("\n%s\n", resp.Description)
+	}
 }
 
 func cmdMangaList() {
+	fmt.Println("📚 Fetching all manga via HTTP...")
 	resp, err := makeRequest("GET", "/manga", nil, "")
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
@@ -367,7 +476,7 @@ func cmdMangaList() {
 
 	if data, ok := resp["data"].(map[string]interface{}); ok {
 		if mangas, ok := data["mangas"].([]interface{}); ok {
-			fmt.Printf("\nTotal manga: %d\n\n", len(mangas))
+			fmt.Printf("\n✓ Total manga: %d\n\n", len(mangas))
 			for i, m := range mangas {
 				manga := m.(map[string]interface{})
 				fmt.Printf("%d. %s by %s [%s]\n",
@@ -377,10 +486,10 @@ func cmdMangaList() {
 	}
 }
 
-// ===== LIBRARY =====
+// ===== LIBRARY (UC-005) - HTTP =====
 func handleLibrary() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub library <list|add|remove|update>")
+		fmt.Println("Usage: mangahub library <list|add|remove>")
 		os.Exit(1)
 	}
 
@@ -393,8 +502,6 @@ func handleLibrary() {
 		cmdLibraryAdd()
 	case "remove":
 		cmdLibraryRemove()
-	case "update":
-		cmdLibraryUpdate()
 	}
 }
 
@@ -405,6 +512,7 @@ func cmdLibraryList() {
 		url += "?status=" + status
 	}
 
+	fmt.Println("📚 Fetching your library via HTTP...")
 	resp, err := makeRequest("GET", url, nil, config.User.Token)
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
@@ -415,10 +523,11 @@ func cmdLibraryList() {
 		if library, ok := data["library"].([]interface{}); ok {
 			if len(library) == 0 {
 				fmt.Println("Your library is empty")
+				fmt.Println("\n💡 Use 'mangahub library add --manga-id <id> --status reading' to add manga")
 				return
 			}
 
-			fmt.Printf("\nYour Library (%d entries)\n\n", len(library))
+			fmt.Printf("\n✓ Your Library (%d entries)\n\n", len(library))
 			for i, entry := range library {
 				e := entry.(map[string]interface{})
 				manga := e["manga"].(map[string]interface{})
@@ -453,13 +562,15 @@ func cmdLibraryAdd() {
 		"rating":          0,
 	}
 
+	fmt.Printf("📚 Adding manga to library via HTTP...\n")
 	_, err := makeRequest("POST", "/library", data, config.User.Token)
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("✓ Added to library")
+	fmt.Println("✓ Added to library successfully!")
+	fmt.Println("\n💡 Use 'mangahub progress update --manga-id <id> --chapter <n>' to track progress")
 }
 
 func cmdLibraryRemove() {
@@ -469,6 +580,8 @@ func cmdLibraryRemove() {
 	}
 
 	mangaID := os.Args[3]
+	
+	fmt.Printf("📚 Removing manga from library via HTTP...\n")
 	_, err := makeRequest("DELETE", "/library/"+mangaID, nil, config.User.Token)
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
@@ -478,31 +591,10 @@ func cmdLibraryRemove() {
 	fmt.Println("✓ Removed from library")
 }
 
-func cmdLibraryUpdate() {
-	mangaID := getFlag("--manga-id")
-	status := getFlag("--status")
-	rating := getFlag("--rating")
-
-	if mangaID == "" {
-		fmt.Println("Usage: mangahub library update --manga-id <id> [--status <status>] [--rating <rating>]")
-		os.Exit(1)
-	}
-
-	data := map[string]interface{}{"manga_id": mangaID}
-	if status != "" {
-		data["status"] = status
-	}
-	if rating != "" {
-		data["rating"] = rating
-	}
-
-	fmt.Println("✓ Updated")
-}
-
-// ===== PROGRESS =====
+// ===== PROGRESS (UC-006) - HTTP with TCP broadcast =====
 func handleProgress() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub progress <update|history|sync>")
+		fmt.Println("Usage: mangahub progress <update|history>")
 		os.Exit(1)
 	}
 
@@ -513,8 +605,6 @@ func handleProgress() {
 		cmdProgressUpdate()
 	case "history":
 		cmdLibraryList()
-	case "sync":
-		fmt.Println("Auto-sync is enabled")
 	}
 }
 
@@ -535,23 +625,27 @@ func cmdProgressUpdate() {
 		"chapter":  chapterNum,
 	}
 
+	fmt.Printf("📖 Updating progress via HTTP...\n")
 	resp, err := makeRequest("PUT", "/progress", data, config.User.Token)
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("✓ Progress updated")
+	fmt.Println("✓ Progress updated successfully!")
 	if data, ok := resp["data"].(map[string]interface{}); ok {
 		fmt.Printf("  Manga: %s\n", data["manga_title"])
 		fmt.Printf("  Chapter: %.0f\n", data["chapter"])
 	}
+	
+	fmt.Println("\n💡 This update will be broadcasted to all your connected TCP clients")
+	fmt.Println("💡 Use 'mangahub sync monitor' to see real-time updates")
 }
 
-// ===== SYNC =====
+// ===== SYNC (UC-007, UC-008) - TCP =====
 func handleSync() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub sync <connect|disconnect|status|monitor>")
+		fmt.Println("Usage: mangahub sync <connect|monitor|status>")
 		os.Exit(1)
 	}
 
@@ -560,88 +654,134 @@ func handleSync() {
 	switch os.Args[2] {
 	case "connect":
 		cmdSyncConnect()
-	case "disconnect":
-		fmt.Println("✓ Disconnected")
-	case "status":
-		cmdSyncStatus()
 	case "monitor":
 		cmdSyncMonitor()
+	case "status":
+		cmdSyncStatus()
 	}
 }
 
 func cmdSyncConnect() {
+	fmt.Printf("🔄 Connecting to TCP sync server at %s:%d...\n", config.Server.Host, config.Server.TCPPort)
+	
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.TCPPort))
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ TCP connection failed: %v\n", err)
+		fmt.Println("\n💡 Make sure the server is running: go run cmd/server/main.go")
 		os.Exit(1)
 	}
 	defer conn.Close()
 
+	// Send authentication
 	authMsg := map[string]string{"user_id": config.User.UserID}
 	authData, _ := json.Marshal(authMsg)
 	conn.Write(append(authData, '\n'))
 
+	// Read confirmation
 	reader := bufio.NewReader(conn)
-	response, _ := reader.ReadBytes('\n')
+	response, err := reader.ReadBytes('\n')
+	if err != nil {
+		fmt.Printf("✗ Failed to read response: %v\n", err)
+		os.Exit(1)
+	}
 
 	var resp map[string]interface{}
 	json.Unmarshal(response, &resp)
 
-	fmt.Println("✓ Connected to sync server")
+	fmt.Println("✓ Connected to TCP sync server successfully!")
 	fmt.Printf("  Status: %s\n", resp["status"])
-}
-
-func cmdSyncStatus() {
-	fmt.Println("TCP Sync Status:")
-	fmt.Println("  Connection: Not connected")
-	fmt.Println("  Auto-sync: enabled")
+	fmt.Printf("  Message: %s\n", resp["message"])
+	fmt.Printf("  Client ID: %s\n", resp["client_id"])
+	
+	fmt.Println("\n💡 Connection established. You will now receive real-time progress updates")
+	fmt.Println("💡 Use 'mangahub sync monitor' to keep the connection alive and monitor updates")
 }
 
 func cmdSyncMonitor() {
+	fmt.Printf("🔄 Connecting to TCP sync server for monitoring...\n")
+	
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.TCPPort))
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ TCP connection failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
 
+	// Authenticate
 	authMsg := map[string]string{"user_id": config.User.UserID}
 	authData, _ := json.Marshal(authMsg)
 	conn.Write(append(authData, '\n'))
 
-	fmt.Println("Monitoring sync updates... (Press Ctrl+C to exit)\n")
+	// Read confirmation
+	reader := bufio.NewReader(conn)
+	confirmData, _ := reader.ReadBytes('\n')
+	var confirm map[string]interface{}
+	json.Unmarshal(confirmData, &confirm)
+	
+	fmt.Println("✓ Connected to TCP sync server")
+	fmt.Printf("  Client ID: %s\n", confirm["client_id"])
+	fmt.Println("\n📡 Monitoring real-time progress updates... (Press Ctrl+C to exit)\n")
 
+	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		<-sigChan
-		fmt.Println("\n\n✓ Stopped monitoring")
+		fmt.Println("\n\n✓ Disconnected from TCP sync server")
 		os.Exit(0)
 	}()
 
-	reader := bufio.NewReader(conn)
+	// Send heartbeat every 30 seconds
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			heartbeat := map[string]string{"type": "heartbeat"}
+			hbData, _ := json.Marshal(heartbeat)
+			conn.Write(append(hbData, '\n'))
+		}
+	}()
+
+	// Listen for updates
 	for {
 		data, err := reader.ReadBytes('\n')
 		if err != nil {
+			fmt.Printf("\n✗ Connection lost: %v\n", err)
 			break
 		}
 
 		var msg map[string]interface{}
 		json.Unmarshal(data, &msg)
 
-		if msgType, ok := msg["type"].(string); ok && msgType == "progress_update" {
-			timestamp := time.Now().Format("15:04:05")
-			fmt.Printf("[%s] %s → Chapter %.0f\n",
-				timestamp, msg["manga_id"], msg["chapter"])
+		if msgType, ok := msg["type"].(string); ok {
+			if msgType == "progress_update" {
+				timestamp := time.Now().Format("15:04:05")
+				fmt.Printf("🔔 [%s] Progress Update\n", timestamp)
+				fmt.Printf("   Manga ID: %v\n", msg["manga_id"])
+				fmt.Printf("   Chapter: %.0f\n", msg["chapter"])
+				fmt.Printf("   Timestamp: %v\n\n", msg["timestamp"])
+			} else if msgType == "heartbeat_ack" {
+				// Silent heartbeat acknowledgment
+			}
 		}
 	}
 }
 
-// ===== NOTIFY =====
+func cmdSyncStatus() {
+	fmt.Println("TCP Sync Status:")
+	fmt.Println("================")
+	fmt.Printf("Server: %s:%d\n", config.Server.Host, config.Server.TCPPort)
+	fmt.Printf("User ID: %s\n", config.User.UserID)
+	fmt.Printf("Auto-sync: %v\n", config.Sync.AutoSync)
+	fmt.Println("\n💡 Use 'mangahub sync connect' to test connection")
+	fmt.Println("💡 Use 'mangahub sync monitor' to watch real-time updates")
+}
+
+// ===== NOTIFY (UC-009, UC-010) - UDP =====
 func handleNotify() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub notify <subscribe|unsubscribe|preferences|test|send>")
+		fmt.Println("Usage: mangahub notify <subscribe|test|send>")
 		os.Exit(1)
 	}
 
@@ -650,26 +790,17 @@ func handleNotify() {
 	switch os.Args[2] {
 	case "subscribe":
 		cmdNotifySubscribe()
-	case "unsubscribe":
-		cmdNotifyUnsubscribe()
-	case "preferences":
-		cmdNotifyPreferences()
 	case "test":
 		cmdNotifyTest()
 	case "send":
 		cmdNotifySend()
-	default:
-		fmt.Println("Unknown notify command")
 	}
 }
 
 func cmdNotifySubscribe() {
-	fmt.Printf("Connecting to UDP server at %s:%d...\n", config.Server.Host, config.Server.UDPPort)
+	fmt.Printf("📢 Connecting to UDP notification server at %s:%d...\n", config.Server.Host, config.Server.UDPPort)
 
-	addr, err := net.ResolveUDPAddr(
-		"udp",
-		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort),
-	)
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort))
 	if err != nil {
 		fmt.Printf("✗ Resolve failed: %v\n", err)
 		os.Exit(1)
@@ -682,7 +813,7 @@ func cmdNotifySubscribe() {
 	}
 	defer conn.Close()
 
-	// Register with server with preferences
+	// Register
 	regMsg := map[string]interface{}{
 		"type":    "register",
 		"user_id": config.User.UserID,
@@ -692,213 +823,96 @@ func cmdNotifySubscribe() {
 		},
 	}
 	data, _ := json.Marshal(regMsg)
-	fmt.Printf("Registering client with UDP server (User ID: %s)...\n", config.User.UserID)
 	n, err := conn.Write(data)
 	if err != nil {
 		fmt.Printf("✗ Failed to register: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Sent registration packet (%d bytes)\n", n)
+	fmt.Printf("Sent registration (%d bytes)\n", n)
 
-	// Wait for registration confirmation
+	// Wait for confirmation
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buffer := make([]byte, 2048)
 	n, _, err = conn.ReadFromUDP(buffer)
 	if err != nil {
-		fmt.Printf("✗ No confirmation from server: %v\n", err)
-		fmt.Println("Make sure UDP server is running: go run cmd/udp-server/main.go")
+		fmt.Printf("✗ No confirmation: %v\n", err)
 		os.Exit(1)
 	}
 
 	var confirmMsg map[string]interface{}
-	if err := json.Unmarshal(buffer[:n], &confirmMsg); err != nil {
-		fmt.Printf("✗ Failed to parse confirmation: %v\n", err)
-		os.Exit(1)
-	}
+	json.Unmarshal(buffer[:n], &confirmMsg)
 
-	if _, ok := confirmMsg["status"].(string); ok {
-		fmt.Printf("✓ Registration successful\n")
-		if msg, ok := confirmMsg["message"].(string); ok {
-			fmt.Printf("  %s\n", msg)
-		}
-		if prefs, ok := confirmMsg["preferences"].(map[string]interface{}); ok {
-			fmt.Println("\n  Notification Preferences:")
-			for k, v := range prefs {
-				fmt.Printf("    - %s: %v\n", k, v)
-			}
-		}
-	} else {
-		fmt.Println("✗ Registration failed: No status in response")
-		os.Exit(1)
+	fmt.Println("✓ Subscribed to UDP notifications successfully!")
+	if msg, ok := confirmMsg["message"].(string); ok {
+		fmt.Printf("  %s\n", msg)
 	}
 
 	fmt.Println("\n🔔 Listening for notifications... (Press Ctrl+C to exit)\n")
 
-	// Handle Ctrl+C
+	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
 	go func() {
 		<-sigChan
-		fmt.Println("\nUnregistering from UDP server...")
-		unreg := map[string]interface{}{
-			"type":    "unregister",
-			"user_id": config.User.UserID,
-		}
+		unreg := map[string]interface{}{"type": "unregister", "user_id": config.User.UserID}
 		b, _ := json.Marshal(unreg)
 		conn.Write(b)
-		time.Sleep(100 * time.Millisecond) // Wait for message to send
-		fmt.Println("✓ Unsubscribed")
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println("\n✓ Unsubscribed from notifications")
 		os.Exit(0)
 	}()
 
-	// Keep-alive ping every 30 seconds
+	// Keep-alive
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			pingMsg := map[string]interface{}{"type": "ping"}
-			pingData, _ := json.Marshal(pingMsg)
+			ping := map[string]interface{}{"type": "ping"}
+			pingData, _ := json.Marshal(ping)
 			conn.Write(pingData)
 		}
 	}()
 
-	// Listen for notifications
-	conn.SetReadDeadline(time.Time{}) // Remove deadline
+	// Listen
+	conn.SetReadDeadline(time.Time{})
 	for {
-		n, addr, err := conn.ReadFromUDP(buffer)
+		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			fmt.Printf("\nUDP read error: %v\n", err)
+			fmt.Printf("\n✗ Error: %v\n", err)
 			return
 		}
 
-		fmt.Printf("[DEBUG] Received %d bytes from %s: %s\n", n, addr, string(buffer[:n]))
-
 		var msg map[string]interface{}
 		if err := json.Unmarshal(buffer[:n], &msg); err != nil {
-			fmt.Printf("[ERROR] Failed to parse message: %v\n", err)
 			continue
 		}
 
-		// Handle different message types
 		if msgType, ok := msg["type"].(string); ok && msgType == "pong" {
-			// Keep-alive pong response
 			continue
 		}
 
-		// System response (registration confirmation, etc)
-		if _, ok := msg["status"].(string); ok {
-			// Already handled during registration
-			continue
-		}
-
-		// Actual notification
 		if title, ok := msg["title"].(string); ok {
-			message, _ := msg["message"].(string)
 			timestamp := time.Now().Format("15:04:05")
-
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			fmt.Printf("[%s] 🔔 %s\n", timestamp, title)
-			if message != "" {
-				fmt.Printf("    %s\n", message)
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Printf("🔔 [%s] %s\n", timestamp, title)
+			if message, ok := msg["message"].(string); ok {
+				fmt.Printf("   %s\n", message)
 			}
-
-			// Show additional details if available
 			if mangaTitle, ok := msg["manga_title"].(string); ok {
-				fmt.Printf("    📖 Manga: %s\n", mangaTitle)
+				fmt.Printf("   📖 %s\n", mangaTitle)
 			}
 			if chapter, ok := msg["chapter"].(float64); ok {
-				fmt.Printf("    📑 Chapter: %.0f\n", chapter)
+				fmt.Printf("   📑 Chapter %.0f\n", chapter)
 			}
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			fmt.Println()
-			continue
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 		}
 	}
-}
-
-func cmdNotifyUnsubscribe() {
-	addr, err := net.ResolveUDPAddr(
-		"udp",
-		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort),
-	)
-	if err != nil {
-		fmt.Printf("✗ Resolve failed: %v\n", err)
-		return
-	}
-
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
-		return
-	}
-	defer conn.Close()
-
-	// Tạo gói unregister
-	msg := map[string]interface{}{
-		"type":    "unregister",
-		"user_id": config.User.UserID,
-	}
-	data, _ := json.Marshal(msg)
-
-	// Gửi đến server
-	n, err := conn.Write(data)
-	if err != nil {
-		fmt.Printf("✗ Failed to send unregister: %v\n", err)
-		return
-	}
-	fmt.Printf("Sent %d bytes to server\n", n)
-
-	// Chờ phản hồi từ server tối đa 3 giây
-	buffer := make([]byte, 2048)
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _, err = conn.ReadFromUDP(buffer)
-	if err != nil {
-		fmt.Println("✗ No response from server (timeout)")
-		return
-	}
-
-	// Parse response
-	var resp map[string]interface{}
-	if err := json.Unmarshal(buffer[:n], &resp); err != nil {
-		fmt.Printf("✗ Failed to parse server response: %v\n", err)
-		return
-	}
-
-	// In status + message nếu có
-	if status, ok := resp["status"].(string); ok {
-		msg := ""
-		if m, ok := resp["message"].(string); ok {
-			msg = m
-		}
-		fmt.Printf("✓ %s\n", status)
-		if msg != "" {
-			fmt.Printf("  %s\n", msg)
-		}
-	} else {
-		fmt.Println("✓ Unsubscribed (no status from server)")
-	}
-}
-
-func cmdNotifyPreferences() {
-	fmt.Println("Notification Preferences")
-	fmt.Println("========================")
-
-	fmt.Printf("Enabled : %v\n", config.Notifications.Enabled)
-	fmt.Printf("Sound   : %v\n", config.Notifications.Sound)
-
-	fmt.Println("\nNotification Types:")
-	fmt.Println("  - Chapter releases")
-	fmt.Println("  - System updates")
 }
 
 func cmdNotifyTest() {
-	fmt.Printf("Testing UDP connection to %s:%d...\n", config.Server.Host, config.Server.UDPPort)
+	fmt.Printf("🧪 Testing UDP connection to %s:%d...\n", config.Server.Host, config.Server.UDPPort)
 
-	addr, err := net.ResolveUDPAddr(
-		"udp",
-		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort),
-	)
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort))
 	if err != nil {
 		fmt.Printf("✗ Resolve failed: %v\n", err)
 		return
@@ -911,43 +925,25 @@ func cmdNotifyTest() {
 	}
 	defer conn.Close()
 
-	// Send ping message
-	msg := map[string]interface{}{
-		"type": "ping",
-	}
+	msg := map[string]interface{}{"type": "ping"}
 	data, _ := json.Marshal(msg)
 
-	fmt.Printf("Sending UDP packet: %s\n", string(data))
 	start := time.Now()
-	n, err := conn.Write(data)
-	if err != nil {
-		fmt.Printf("✗ Failed to send UDP packet: %v\n", err)
-		return
-	}
-	fmt.Printf("Sent %d bytes\n", n)
+	conn.Write(data)
 
-	// Wait for response
 	buffer := make([]byte, 1024)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _, err = conn.ReadFromUDP(buffer)
+	n, _, err := conn.ReadFromUDP(buffer)
 	if err != nil {
-		fmt.Printf("✗ No response from UDP server (timeout): %v\n", err)
-		fmt.Println("Make sure UDP server is running: go run cmd/udp-server/main.go")
+		fmt.Printf("✗ No response: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Received %d bytes: %s\n", n, string(buffer[:n]))
 	var resp map[string]interface{}
 	json.Unmarshal(buffer[:n], &resp)
 
 	if resp["type"] == "pong" {
-		fmt.Printf("\n✓ UDP communication successful! (%d ms)\n",
-			time.Since(start).Milliseconds())
-		if ts, ok := resp["timestamp"]; ok {
-			fmt.Printf("  Server timestamp: %v\n", ts)
-		}
-	} else {
-		fmt.Printf("✗ Unexpected response: %v\n", resp)
+		fmt.Printf("✓ UDP communication successful! (%d ms)\n", time.Since(start).Milliseconds())
 	}
 }
 
@@ -957,7 +953,6 @@ func cmdNotifySend() {
 
 	if mangaID == "" || chapterStr == "" {
 		fmt.Println("Usage: mangahub notify send --manga-id <id> --chapter <number>")
-		fmt.Println("Example: mangahub notify send --manga-id 1 --chapter 100")
 		os.Exit(1)
 	}
 
@@ -969,9 +964,10 @@ func cmdNotifySend() {
 		"chapter":  chapter,
 	}
 
+	fmt.Println("📢 Sending notification via HTTP API...")
 	resp, err := makeRequest("POST", "/notify/chapter", data, config.User.Token)
 	if err != nil {
-		fmt.Printf("✗ Failed to send notification: %v\n", err)
+		fmt.Printf("✗ Failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -980,13 +976,13 @@ func cmdNotifySend() {
 		fmt.Printf("  Manga: %s\n", respData["manga_title"])
 		fmt.Printf("  Chapter: %.0f\n", respData["chapter"])
 	}
-	fmt.Println("\n📢 All subscribed clients will receive this notification")
+	fmt.Println("\n💡 All subscribed UDP clients will receive this notification")
 }
 
-// ===== CHAT =====
+// ===== CHAT (UC-011, UC-012, UC-013) - WebSocket =====
 func handleChat() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub chat <join|send|history>")
+		fmt.Println("Usage: mangahub chat join")
 		os.Exit(1)
 	}
 
@@ -995,10 +991,6 @@ func handleChat() {
 	switch os.Args[2] {
 	case "join":
 		cmdChatJoin()
-	case "send":
-		fmt.Println("Use 'mangahub chat join' for interactive chat")
-	case "history":
-		fmt.Println("History shown when joining chat")
 	}
 }
 
@@ -1006,16 +998,20 @@ func cmdChatJoin() {
 	wsURL := fmt.Sprintf("ws://%s:%d/ws/chat?token=%s",
 		config.Server.Host, config.Server.HTTPPort, config.User.Token)
 
+	fmt.Printf("💬 Connecting to WebSocket chat server...\n")
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ WebSocket connection failed: %v\n", err)
+		fmt.Println("\n💡 Make sure the server is running")
 		os.Exit(1)
 	}
 	defer conn.Close()
 
-	fmt.Println("✓ Connected to chat")
-	fmt.Println("Type your message (or /quit to exit)\n")
+	fmt.Println("✓ Connected to chat successfully!")
+	fmt.Println("\n💬 Chat Room - Type your message (or /quit to exit)")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
+	// Read messages
 	go func() {
 		for {
 			_, message, err := conn.ReadMessage()
@@ -1027,17 +1023,36 @@ func cmdChatJoin() {
 			json.Unmarshal(message, &msg)
 
 			if msgType, ok := msg["type"].(string); ok && msgType == "history" {
+				if messages, ok := msg["messages"].([]interface{}); ok && len(messages) > 0 {
+					fmt.Println("📜 Recent chat history:")
+					for _, m := range messages {
+						msgData := m.(map[string]interface{})
+						username := msgData["username"].(string)
+						text := msgData["message"].(string)
+						ts := int64(msgData["timestamp"].(float64))
+						timestamp := time.Unix(ts, 0).Format("15:04")
+						fmt.Printf("[%s] %s: %s\n", timestamp, username, text)
+					}
+					fmt.Println()
+				}
 				continue
 			}
 
 			if username, ok := msg["username"].(string); ok {
 				text, _ := msg["message"].(string)
-				timestamp := time.Unix(int64(msg["timestamp"].(float64)), 0)
-				fmt.Printf("[%s] %s: %s\n", timestamp.Format("15:04"), username, text)
+				ts := int64(msg["timestamp"].(float64))
+				timestamp := time.Unix(ts, 0).Format("15:04")
+				
+				if username == "System" {
+					fmt.Printf("ℹ️  [%s] %s\n", timestamp, text)
+				} else {
+					fmt.Printf("[%s] %s: %s\n", timestamp, username, text)
+				}
 			}
 		}
 	}()
 
+	// Send messages
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		text := scanner.Text()
@@ -1060,7 +1075,7 @@ func cmdChatJoin() {
 	}
 }
 
-// ===== GRPC =====
+// ===== GRPC (UC-014, UC-015, UC-016) =====
 func handleGRPC() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: mangahub grpc <get|search|update>")
@@ -1084,12 +1099,14 @@ func cmdGRPCGet() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("📖 Fetching manga via gRPC: %s\n", mangaID)
+
 	conn, err := grpc.NewClient(
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ gRPC connection failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -1100,11 +1117,12 @@ func cmdGRPCGet() {
 
 	resp, err := client.GetManga(ctx, &pb.GetMangaRequest{MangaId: mangaID})
 	if err != nil {
-		fmt.Printf("✗ Request failed: %v\n", err)
+		fmt.Printf("✗ gRPC request failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n%s\n", resp.Title)
+	fmt.Printf("\n✓ Success via gRPC!\n\n")
+	fmt.Printf("%s\n", resp.Title)
 	fmt.Println(strings.Repeat("=", len(resp.Title)))
 	fmt.Printf("ID: %s\n", resp.Id)
 	fmt.Printf("Author: %s\n", resp.Author)
@@ -1128,12 +1146,14 @@ func cmdGRPCSearch() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("🔍 Searching via gRPC: %s\n", query)
+
 	conn, err := grpc.NewClient(
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ gRPC connection failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -1148,7 +1168,7 @@ func cmdGRPCSearch() {
 		Offset: 0,
 	})
 	if err != nil {
-		fmt.Printf("✗ Request failed: %v\n", err)
+		fmt.Printf("✗ gRPC request failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -1157,7 +1177,7 @@ func cmdGRPCSearch() {
 		return
 	}
 
-	fmt.Printf("\nFound %d results:\n\n", len(resp.Mangas))
+	fmt.Printf("\n✓ Found %d results via gRPC:\n\n", len(resp.Mangas))
 	for i, manga := range resp.Mangas {
 		fmt.Printf("%d. %s\n", i+1, manga.Title)
 		fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %d\n",
@@ -1179,12 +1199,14 @@ func cmdGRPCUpdate() {
 	var chapterNum int32
 	fmt.Sscanf(chapter, "%d", &chapterNum)
 
+	fmt.Printf("📖 Updating progress via gRPC...\n")
+
 	conn, err := grpc.NewClient(
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n", err)
+		fmt.Printf("✗ gRPC connection failed: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -1199,13 +1221,14 @@ func cmdGRPCUpdate() {
 		Chapter: chapterNum,
 	})
 	if err != nil {
-		fmt.Printf("✗ Request failed: %v\n", err)
+		fmt.Printf("✗ gRPC request failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	if resp.Success {
-		fmt.Println("✓ Progress updated via gRPC")
+		fmt.Println("✓ Progress updated successfully via gRPC!")
 		fmt.Printf("  Chapter: %d\n", resp.CurrentChapter)
+		fmt.Println("\n💡 This update triggered TCP broadcast to connected clients")
 	} else {
 		fmt.Printf("✗ %s\n", resp.Message)
 	}
@@ -1214,16 +1237,11 @@ func cmdGRPCUpdate() {
 // ===== SERVER =====
 func handleServer() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub server <start|stop|status|ping>")
+		fmt.Println("Usage: mangahub server <status|ping>")
 		os.Exit(1)
 	}
 
 	switch os.Args[2] {
-	case "start":
-		fmt.Println("Start server with:")
-		fmt.Println("  go run cmd/server/main.go")
-	case "stop":
-		fmt.Println("Stop server with Ctrl+C in server terminal")
 	case "status":
 		cmdServerStatus()
 	case "ping":
@@ -1234,9 +1252,11 @@ func handleServer() {
 func cmdServerStatus() {
 	baseURL := fmt.Sprintf("http://%s:%d", config.Server.Host, config.Server.HTTPPort)
 
+	fmt.Println("🔍 Checking server status...")
 	resp, err := http.Get(baseURL + "/health")
 	if err != nil {
 		fmt.Println("✗ Server is not running")
+		fmt.Println("\n💡 Start server: go run cmd/server/main.go")
 		return
 	}
 	defer resp.Body.Close()
@@ -1245,7 +1265,7 @@ func cmdServerStatus() {
 	var health map[string]interface{}
 	json.Unmarshal(body, &health)
 
-	fmt.Println("MangaHub Server Status")
+	fmt.Println("\n✓ MangaHub Server Status")
 	fmt.Printf("Status: %s\n", health["status"])
 
 	if services, ok := health["services"].(map[string]interface{}); ok {
@@ -1276,6 +1296,8 @@ func cmdServerStatus() {
 }
 
 func cmdServerPing() {
+	fmt.Println("🏓 Pinging all server protocols...\n")
+	
 	baseURL := fmt.Sprintf("http://%s:%d", config.Server.Host, config.Server.HTTPPort)
 
 	start := time.Now()
@@ -1316,7 +1338,6 @@ func cmdServerPing() {
 	grpcConn, err := grpc.NewClient(
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithTimeout(3*time.Second),
 	)
 	latency = time.Since(start)
 
@@ -1331,7 +1352,7 @@ func cmdServerPing() {
 // ===== CONFIG =====
 func handleConfig() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub config <show|set>")
+		fmt.Println("Usage: mangahub config show")
 		os.Exit(1)
 	}
 
@@ -1340,14 +1361,98 @@ func handleConfig() {
 		data, _ := yaml.Marshal(config)
 		fmt.Println("Current Configuration:")
 		fmt.Println(string(data))
-	case "set":
-		if len(os.Args) < 5 {
-			fmt.Println("Usage: mangahub config set <key> <value>")
-			os.Exit(1)
-		}
-		fmt.Printf("Setting %s = %s\n", os.Args[3], os.Args[4])
-		saveConfig()
 	}
+}
+
+// ===== STATS =====
+func handleStats() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: mangahub stats overview")
+		os.Exit(1)
+	}
+
+	requireAuth()
+
+	switch os.Args[2] {
+	case "overview":
+		cmdStatsOverview()
+	}
+}
+
+func cmdStatsOverview() {
+	fmt.Println("📊 Fetching statistics via HTTP...")
+	resp, err := makeRequest("GET", "/library", nil, config.User.Token)
+	if err != nil {
+		fmt.Printf("✗ Failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if data, ok := resp["data"].(map[string]interface{}); ok {
+		if library, ok := data["library"].([]interface{}); ok {
+			fmt.Println("\n✓ Reading Statistics")
+			fmt.Println("====================")
+			fmt.Printf("Total Manga: %d\n", len(library))
+
+			statusCount := make(map[string]int)
+			totalChapters := 0
+
+			for _, entry := range library {
+				e := entry.(map[string]interface{})
+				progress := e["progress"].(map[string]interface{})
+				status := progress["status"].(string)
+				statusCount[status]++
+
+				if ch, ok := progress["current_chapter"].(float64); ok {
+					totalChapters += int(ch)
+				}
+			}
+
+			fmt.Println("\nBy Status:")
+			for status, count := range statusCount {
+				fmt.Printf("  %-15s: %d\n", status, count)
+			}
+
+			fmt.Printf("\nTotal Chapters Read: %d\n", totalChapters)
+		}
+	}
+}
+
+// ===== EXPORT =====
+func handleExport() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: mangahub export library")
+		os.Exit(1)
+	}
+
+	requireAuth()
+
+	switch os.Args[2] {
+	case "library":
+		cmdExportLibrary()
+	}
+}
+
+func cmdExportLibrary() {
+	output := getFlag("--output")
+	if output == "" {
+		output = "library_export.json"
+	}
+
+	fmt.Println("📤 Exporting library via HTTP...")
+	resp, err := makeRequest("GET", "/library", nil, config.User.Token)
+	if err != nil {
+		fmt.Printf("✗ Export failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(resp, "", "  ")
+	err = os.WriteFile(output, data, 0644)
+	if err != nil {
+		fmt.Printf("✗ Failed to write file: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Exported to: %s\n", output)
 }
 
 // ===== HELPER FUNCTIONS =====
@@ -1420,6 +1525,15 @@ func getFlag(flag string) string {
 	return ""
 }
 
+func hasFlag(flag string) bool {
+	for _, arg := range os.Args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func requireAuth() {
 	if config.User.Token == "" {
 		fmt.Println("✗ Please login first")
@@ -1432,320 +1546,4 @@ func readPassword() string {
 	var password string
 	fmt.Scanln(&password)
 	return password
-}
-
-// ===== STATS =====
-func handleStats() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub stats <overview|detailed>")
-		os.Exit(1)
-	}
-
-	requireAuth()
-
-	switch os.Args[2] {
-	case "overview", "detailed":
-		cmdStatsOverview()
-	}
-}
-
-func cmdStatsOverview() {
-	resp, err := makeRequest("GET", "/library", nil, config.User.Token)
-	if err != nil {
-		fmt.Printf("✗ Failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	if data, ok := resp["data"].(map[string]interface{}); ok {
-		if library, ok := data["library"].([]interface{}); ok {
-			fmt.Println("Reading Statistics")
-			fmt.Println("==================")
-			fmt.Printf("Total Manga: %d\n", len(library))
-
-			statusCount := make(map[string]int)
-			totalChapters := 0
-
-			for _, entry := range library {
-				e := entry.(map[string]interface{})
-				progress := e["progress"].(map[string]interface{})
-				status := progress["status"].(string)
-				statusCount[status]++
-
-				if ch, ok := progress["current_chapter"].(float64); ok {
-					totalChapters += int(ch)
-				}
-			}
-
-			fmt.Println("\nBy Status:")
-			for status, count := range statusCount {
-				fmt.Printf("  %-15s: %d\n", status, count)
-			}
-
-			fmt.Printf("\nTotal Chapters Read: %d\n", totalChapters)
-		}
-	}
-}
-
-// ===== EXPORT =====
-func handleExport() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub export <library|progress>")
-		os.Exit(1)
-	}
-
-	requireAuth()
-
-	switch os.Args[2] {
-	case "library", "progress":
-		cmdExportLibrary()
-	}
-}
-
-func cmdExportLibrary() {
-	output := getFlag("--output")
-	if output == "" {
-		output = "library_export.json"
-	}
-
-	resp, err := makeRequest("GET", "/library", nil, config.User.Token)
-	if err != nil {
-		fmt.Printf("✗ Export failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	data, _ := json.MarshalIndent(resp, "", "  ")
-	err = os.WriteFile(output, data, 0644)
-	if err != nil {
-		fmt.Printf("✗ Failed to write file: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("✓ Exported to: %s\n", output)
-}
-
-// ===== DB =====
-func handleDB() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub db <check|repair|stats>")
-		os.Exit(1)
-	}
-
-	switch os.Args[2] {
-	case "check":
-		cmdDBCheck()
-	case "repair":
-		cmdDBRepair()
-	case "stats":
-		cmdDBStats()
-	}
-}
-
-func cmdDBCheck() {
-	if _, err := os.Stat(config.Database.Path); os.IsNotExist(err) {
-		fmt.Println("✗ Database file not found")
-		fmt.Printf("  Path: %s\n", config.Database.Path)
-		return
-	}
-
-	info, _ := os.Stat(config.Database.Path)
-	fmt.Println("Database Check")
-	fmt.Println("==============")
-	fmt.Printf("Path: %s\n", config.Database.Path)
-	fmt.Printf("Size: %.2f MB\n", float64(info.Size())/1024/1024)
-	fmt.Println("\n✓ Database file exists")
-	fmt.Println("✓ No corruption detected")
-}
-
-func cmdDBRepair() {
-	fmt.Println("Running database repair...")
-	fmt.Println("✓ Database repaired successfully")
-}
-
-func cmdDBStats() {
-	if _, err := os.Stat(config.Database.Path); os.IsNotExist(err) {
-		fmt.Println("✗ Database file not found")
-		return
-	}
-
-	info, _ := os.Stat(config.Database.Path)
-	fmt.Println("Database Statistics")
-	fmt.Println("===================")
-	fmt.Printf("Path: %s\n", config.Database.Path)
-	fmt.Printf("Size: %.2f MB\n", float64(info.Size())/1024/1024)
-	fmt.Printf("Modified: %s\n", info.ModTime().Format("2006-01-02 15:04:05"))
-}
-
-// ===== LOGS =====
-func handleLogs() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub logs <errors|search|tail>")
-		os.Exit(1)
-	}
-
-	switch os.Args[2] {
-	case "errors":
-		cmdLogsErrors()
-	case "search":
-		cmdLogsSearch()
-	case "tail":
-		cmdLogsTail()
-	}
-}
-
-func cmdLogsErrors() {
-	logFile := filepath.Join(config.Logging.Path, "server.log")
-
-	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		fmt.Println("No log file found")
-		return
-	}
-
-	file, err := os.Open(logFile)
-	if err != nil {
-		fmt.Printf("✗ Failed to open log file: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	fmt.Println("Recent Errors:")
-	fmt.Println("==============")
-
-	scanner := bufio.NewScanner(file)
-	errorCount := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(strings.ToLower(line), "error") {
-			fmt.Println(line)
-			errorCount++
-		}
-	}
-
-	if errorCount == 0 {
-		fmt.Println("No errors found")
-	}
-}
-
-func cmdLogsSearch() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub logs search <term>")
-		os.Exit(1)
-	}
-
-	term := os.Args[3]
-	logFile := filepath.Join(config.Logging.Path, "server.log")
-
-	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		fmt.Println("No log file found")
-		return
-	}
-
-	file, err := os.Open(logFile)
-	if err != nil {
-		fmt.Printf("✗ Failed to open log file: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	fmt.Printf("Searching for: %s\n", term)
-	fmt.Println("==============")
-
-	scanner := bufio.NewScanner(file)
-	matchCount := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(strings.ToLower(line), strings.ToLower(term)) {
-			fmt.Println(line)
-			matchCount++
-		}
-	}
-
-	if matchCount == 0 {
-		fmt.Println("No matches found")
-	} else {
-		fmt.Printf("\nFound %d matches\n", matchCount)
-	}
-}
-
-func cmdLogsTail() {
-	logFile := filepath.Join(config.Logging.Path, "server.log")
-
-	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		fmt.Println("No log file found")
-		return
-	}
-
-	file, err := os.Open(logFile)
-	if err != nil {
-		fmt.Printf("✗ Failed to open log file: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	// Read last 20 lines
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > 20 {
-			lines = lines[1:]
-		}
-	}
-
-	fmt.Println("Last 20 log entries:")
-	fmt.Println("====================")
-	for _, line := range lines {
-		fmt.Println(line)
-	}
-}
-
-// ===== PROFILE =====
-func handleProfile() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub profile <create|switch|list>")
-		os.Exit(1)
-	}
-
-	switch os.Args[2] {
-	case "create":
-		name := getFlag("--name")
-		if name == "" {
-			fmt.Println("Usage: mangahub profile create --name <name>")
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Profile '%s' created\n", name)
-	case "switch":
-		name := getFlag("--name")
-		if name == "" {
-			fmt.Println("Usage: mangahub profile switch --name <name>")
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Switched to profile '%s'\n", name)
-	case "list":
-		fmt.Println("Available Profiles:")
-		fmt.Println("  default (active)")
-	}
-}
-
-// ===== BACKUP =====
-func handleBackup() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub backup <create|restore>")
-		os.Exit(1)
-	}
-
-	switch os.Args[2] {
-	case "create":
-		output := getFlag("--output")
-		if output == "" {
-			output = fmt.Sprintf("mangahub-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
-		}
-		fmt.Printf("✓ Backup created: %s\n", output)
-	case "restore":
-		input := getFlag("--input")
-		if input == "" {
-			fmt.Println("Usage: mangahub backup restore --input <file>")
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Restored from: %s\n", input)
-	}
 }

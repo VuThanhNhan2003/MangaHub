@@ -117,7 +117,31 @@ This creates:
 
 ## Running the Servers
 
-### Start All Servers (Recommended)
+### Using Docker (Recommended)
+
+**First time - Build and run:**
+```bash
+docker-compose up --build
+```
+
+**Next times - Just run:**
+```bash
+docker-compose up
+```
+
+**Stop the server:**
+```bash
+docker-compose down
+```
+
+Docker will automatically start all 5 servers:
+- HTTP API Server on port 8080
+- TCP Sync Server on port 9090
+- UDP Notification Server on port 9091
+- gRPC Service on port 9092
+- WebSocket Chat on port 8080
+
+### Start All Servers (Manual)
 
 ```bash
 go run cmd/server/main.go

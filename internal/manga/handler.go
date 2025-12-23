@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"mangahub/internal/auth"
 	"mangahub/internal/udp"
 	"mangahub/pkg/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
@@ -325,8 +326,8 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		Success: true,
 		Message: "progress updated successfully",
 		Data: gin.H{
-			"manga_id": req.MangaID,
-			"chapter":  req.Chapter,
+			"manga_id":    req.MangaID,
+			"chapter":     req.Chapter,
 			"manga_title": manga.Title,
 		},
 	})
@@ -370,4 +371,50 @@ func (h *Handler) RemoveFromLibrary(c *gin.Context) {
 		Success: true,
 		Message: "manga removed from library",
 	})
+}
+
+// SendNotification sends chapter release notification (Admin only)
+func (h *Handler) SendNotification(c *gin.Context) {
+	var req struct {
+		MangaID string `json:"manga_id" binding:"required"`
+		Chapter int    `json:"chapter" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{
+			Success: false,
+			Error:   "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Get manga details
+	manga, err := h.repo.GetByID(req.MangaID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.Response{
+			Success: false,
+			Error:   "manga not found",
+		})
+		return
+	}
+
+	// Send notification via UDP server
+	if h.udpServer != nil {
+		h.udpServer.SendChapterNotification(manga.Title, req.Chapter, req.MangaID)
+
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "notification sent successfully",
+			Data: gin.H{
+				"manga_title": manga.Title,
+				"chapter":     req.Chapter,
+				"manga_id":    req.MangaID,
+			},
+		})
+	} else {
+		c.JSON(http.StatusServiceUnavailable, models.Response{
+			Success: false,
+			Error:   "notification service unavailable",
+		})
+	}
 }

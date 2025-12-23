@@ -16,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	pb "mangahub/proto/proto"
+
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
-	pb "mangahub/proto/proto"
 )
 
 const VERSION = "1.0.0"
@@ -126,7 +127,7 @@ Commands:
   library <list|add>       Manage your library
   progress update          Update reading progress
   sync <connect|monitor>   TCP synchronization
-  notify subscribe         UDP notifications
+  notify <subscribe|send>  UDP notifications
   chat join                WebSocket chat
   grpc <get|search>        gRPC operations
   server <status|ping>     Server management
@@ -290,7 +291,7 @@ func cmdMangaSearch() {
 
 	query := strings.Join(os.Args[3:], " ")
 	url := fmt.Sprintf("/manga?query=%s", query)
-	
+
 	resp, err := makeRequest("GET", url, nil, "")
 	if err != nil {
 		fmt.Printf("✗ Search failed: %v\n", err)
@@ -308,7 +309,7 @@ func cmdMangaSearch() {
 			for i, m := range mangas {
 				manga := m.(map[string]interface{})
 				fmt.Printf("%d. %s\n", i+1, manga["title"])
-				fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %.0f\n", 
+				fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %.0f\n",
 					manga["id"], manga["author"], manga["status"], manga["total_chapters"])
 			}
 			fmt.Println("\nUse 'mangahub manga info <id>' for details")
@@ -346,7 +347,7 @@ func cmdMangaInfo() {
 
 			if progress, ok := data["progress"].(map[string]interface{}); ok && progress != nil {
 				fmt.Println("\nYour Progress:")
-				fmt.Printf("  Status: %s | Chapter: %.0f", 
+				fmt.Printf("  Status: %s | Chapter: %.0f",
 					progress["status"], progress["current_chapter"])
 				if rating, ok := progress["rating"].(float64); ok && rating > 0 {
 					fmt.Printf(" | Rating: %.0f/10", rating)
@@ -369,7 +370,7 @@ func cmdMangaList() {
 			fmt.Printf("\nTotal manga: %d\n\n", len(mangas))
 			for i, m := range mangas {
 				manga := m.(map[string]interface{})
-				fmt.Printf("%d. %s by %s [%s]\n", 
+				fmt.Printf("%d. %s by %s [%s]\n",
 					i+1, manga["title"], manga["author"], manga["status"])
 			}
 		}
@@ -424,7 +425,7 @@ func cmdLibraryList() {
 				progress := e["progress"].(map[string]interface{})
 
 				fmt.Printf("%d. %s\n", i+1, manga["title"])
-				fmt.Printf("   Status: %s | Chapter: %.0f", 
+				fmt.Printf("   Status: %s | Chapter: %.0f",
 					progress["status"], progress["current_chapter"])
 				if rating, ok := progress["rating"].(float64); ok && rating > 0 {
 					fmt.Printf(" | Rating: %.0f/10", rating)
@@ -640,7 +641,7 @@ func cmdSyncMonitor() {
 // ===== NOTIFY =====
 func handleNotify() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub notify <subscribe|unsubscribe|preferences|test>")
+		fmt.Println("Usage: mangahub notify <subscribe|unsubscribe|preferences|test|send>")
 		os.Exit(1)
 	}
 
@@ -655,13 +656,16 @@ func handleNotify() {
 		cmdNotifyPreferences()
 	case "test":
 		cmdNotifyTest()
+	case "send":
+		cmdNotifySend()
 	default:
 		fmt.Println("Unknown notify command")
 	}
 }
 
-
 func cmdNotifySubscribe() {
+	fmt.Printf("Connecting to UDP server at %s:%d...\n", config.Server.Host, config.Server.UDPPort)
+
 	addr, err := net.ResolveUDPAddr(
 		"udp",
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort),
@@ -678,16 +682,57 @@ func cmdNotifySubscribe() {
 	}
 	defer conn.Close()
 
-	// Register
+	// Register with server with preferences
 	regMsg := map[string]interface{}{
 		"type":    "register",
 		"user_id": config.User.UserID,
+		"preferences": map[string]bool{
+			"chapter_releases": config.Notifications.Enabled,
+			"system_updates":   true,
+		},
 	}
 	data, _ := json.Marshal(regMsg)
-	conn.Write(data)
+	fmt.Printf("Registering client with UDP server (User ID: %s)...\n", config.User.UserID)
+	n, err := conn.Write(data)
+	if err != nil {
+		fmt.Printf("✗ Failed to register: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Sent registration packet (%d bytes)\n", n)
 
-	fmt.Println("✓ Subscribed to notifications")
-	fmt.Println("Listening for notifications... (Ctrl+C to exit)\n")
+	// Wait for registration confirmation
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, 2048)
+	n, _, err = conn.ReadFromUDP(buffer)
+	if err != nil {
+		fmt.Printf("✗ No confirmation from server: %v\n", err)
+		fmt.Println("Make sure UDP server is running: go run cmd/udp-server/main.go")
+		os.Exit(1)
+	}
+
+	var confirmMsg map[string]interface{}
+	if err := json.Unmarshal(buffer[:n], &confirmMsg); err != nil {
+		fmt.Printf("✗ Failed to parse confirmation: %v\n", err)
+		os.Exit(1)
+	}
+
+	if _, ok := confirmMsg["status"].(string); ok {
+		fmt.Printf("✓ Registration successful\n")
+		if msg, ok := confirmMsg["message"].(string); ok {
+			fmt.Printf("  %s\n", msg)
+		}
+		if prefs, ok := confirmMsg["preferences"].(map[string]interface{}); ok {
+			fmt.Println("\n  Notification Preferences:")
+			for k, v := range prefs {
+				fmt.Printf("    - %s: %v\n", k, v)
+			}
+		}
+	} else {
+		fmt.Println("✗ Registration failed: No status in response")
+		os.Exit(1)
+	}
+
+	fmt.Println("\n🔔 Listening for notifications... (Press Ctrl+C to exit)\n")
 
 	// Handle Ctrl+C
 	sigChan := make(chan os.Signal, 1)
@@ -695,43 +740,79 @@ func cmdNotifySubscribe() {
 
 	go func() {
 		<-sigChan
+		fmt.Println("\nUnregistering from UDP server...")
 		unreg := map[string]interface{}{
 			"type":    "unregister",
 			"user_id": config.User.UserID,
 		}
 		b, _ := json.Marshal(unreg)
 		conn.Write(b)
-		fmt.Println("\n✓ Unsubscribed")
+		time.Sleep(100 * time.Millisecond) // Wait for message to send
+		fmt.Println("✓ Unsubscribed")
 		os.Exit(0)
 	}()
 
-	buffer := make([]byte, 2048)
+	// Keep-alive ping every 30 seconds
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			pingMsg := map[string]interface{}{"type": "ping"}
+			pingData, _ := json.Marshal(pingMsg)
+			conn.Write(pingData)
+		}
+	}()
+
+	// Listen for notifications
+	conn.SetReadDeadline(time.Time{}) // Remove deadline
 	for {
-		n, _, err := conn.ReadFromUDP(buffer)
+		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			fmt.Println("UDP error:", err)
+			fmt.Printf("\nUDP read error: %v\n", err)
 			return
 		}
 
-		var msg map[string]interface{}
-		json.Unmarshal(buffer[:n], &msg)
+		fmt.Printf("[DEBUG] Received %d bytes from %s: %s\n", n, addr, string(buffer[:n]))
 
-		// System response
-		if status, ok := msg["status"].(string); ok {
-			fmt.Printf("[system] %s\n", status)
+		var msg map[string]interface{}
+		if err := json.Unmarshal(buffer[:n], &msg); err != nil {
+			fmt.Printf("[ERROR] Failed to parse message: %v\n", err)
 			continue
 		}
 
-		// Notification
+		// Handle different message types
+		if msgType, ok := msg["type"].(string); ok && msgType == "pong" {
+			// Keep-alive pong response
+			continue
+		}
+
+		// System response (registration confirmation, etc)
+		if _, ok := msg["status"].(string); ok {
+			// Already handled during registration
+			continue
+		}
+
+		// Actual notification
 		if title, ok := msg["title"].(string); ok {
 			message, _ := msg["message"].(string)
-			fmt.Printf("🔔 %s\n   %s\n\n", title, message)
-			continue
-		}
+			timestamp := time.Now().Format("15:04:05")
 
-		// Pong
-		if msgType, ok := msg["type"].(string); ok && msgType == "pong" {
-			fmt.Println("✓ UDP pong received")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Printf("[%s] 🔔 %s\n", timestamp, title)
+			if message != "" {
+				fmt.Printf("    %s\n", message)
+			}
+
+			// Show additional details if available
+			if mangaTitle, ok := msg["manga_title"].(string); ok {
+				fmt.Printf("    📖 Manga: %s\n", mangaTitle)
+			}
+			if chapter, ok := msg["chapter"].(float64); ok {
+				fmt.Printf("    📑 Chapter: %.0f\n", chapter)
+			}
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println()
+			continue
 		}
 	}
 }
@@ -753,26 +834,50 @@ func cmdNotifyUnsubscribe() {
 	}
 	defer conn.Close()
 
+	// Tạo gói unregister
 	msg := map[string]interface{}{
 		"type":    "unregister",
 		"user_id": config.User.UserID,
 	}
 	data, _ := json.Marshal(msg)
-	conn.Write(data)
 
-	buffer := make([]byte, 1024)
+	// Gửi đến server
+	n, err := conn.Write(data)
+	if err != nil {
+		fmt.Printf("✗ Failed to send unregister: %v\n", err)
+		return
+	}
+	fmt.Printf("Sent %d bytes to server\n", n)
+
+	// Chờ phản hồi từ server tối đa 3 giây
+	buffer := make([]byte, 2048)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _, err := conn.ReadFromUDP(buffer)
-	if err == nil && n > 0 {
-		var resp map[string]interface{}
-		json.Unmarshal(buffer[:n], &resp)
-		if status, ok := resp["status"]; ok {
-			fmt.Printf("✓ %s\n", status)
-			return
-		}
+	n, _, err = conn.ReadFromUDP(buffer)
+	if err != nil {
+		fmt.Println("✗ No response from server (timeout)")
+		return
 	}
 
-	fmt.Println("✓ Unsubscribed")
+	// Parse response
+	var resp map[string]interface{}
+	if err := json.Unmarshal(buffer[:n], &resp); err != nil {
+		fmt.Printf("✗ Failed to parse server response: %v\n", err)
+		return
+	}
+
+	// In status + message nếu có
+	if status, ok := resp["status"].(string); ok {
+		msg := ""
+		if m, ok := resp["message"].(string); ok {
+			msg = m
+		}
+		fmt.Printf("✓ %s\n", status)
+		if msg != "" {
+			fmt.Printf("  %s\n", msg)
+		}
+	} else {
+		fmt.Println("✓ Unsubscribed (no status from server)")
+	}
 }
 
 func cmdNotifyPreferences() {
@@ -788,6 +893,8 @@ func cmdNotifyPreferences() {
 }
 
 func cmdNotifyTest() {
+	fmt.Printf("Testing UDP connection to %s:%d...\n", config.Server.Host, config.Server.UDPPort)
+
 	addr, err := net.ResolveUDPAddr(
 		"udp",
 		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.UDPPort),
@@ -804,33 +911,77 @@ func cmdNotifyTest() {
 	}
 	defer conn.Close()
 
+	// Send ping message
 	msg := map[string]interface{}{
 		"type": "ping",
 	}
 	data, _ := json.Marshal(msg)
 
+	fmt.Printf("Sending UDP packet: %s\n", string(data))
 	start := time.Now()
-	conn.Write(data)
+	n, err := conn.Write(data)
+	if err != nil {
+		fmt.Printf("✗ Failed to send UDP packet: %v\n", err)
+		return
+	}
+	fmt.Printf("Sent %d bytes\n", n)
 
+	// Wait for response
 	buffer := make([]byte, 1024)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, _, err := conn.ReadFromUDP(buffer)
+	n, _, err = conn.ReadFromUDP(buffer)
 	if err != nil {
-		fmt.Println("✗ No response from UDP server")
+		fmt.Printf("✗ No response from UDP server (timeout): %v\n", err)
+		fmt.Println("Make sure UDP server is running: go run cmd/udp-server/main.go")
 		return
 	}
 
+	fmt.Printf("Received %d bytes: %s\n", n, string(buffer[:n]))
 	var resp map[string]interface{}
 	json.Unmarshal(buffer[:n], &resp)
 
 	if resp["type"] == "pong" {
-		fmt.Printf("✓ UDP test successful (%d ms)\n",
+		fmt.Printf("\n✓ UDP communication successful! (%d ms)\n",
 			time.Since(start).Milliseconds())
+		if ts, ok := resp["timestamp"]; ok {
+			fmt.Printf("  Server timestamp: %v\n", ts)
+		}
 	} else {
-		fmt.Println("✗ Unexpected response")
+		fmt.Printf("✗ Unexpected response: %v\n", resp)
 	}
 }
 
+func cmdNotifySend() {
+	mangaID := getFlag("--manga-id")
+	chapterStr := getFlag("--chapter")
+
+	if mangaID == "" || chapterStr == "" {
+		fmt.Println("Usage: mangahub notify send --manga-id <id> --chapter <number>")
+		fmt.Println("Example: mangahub notify send --manga-id 1 --chapter 100")
+		os.Exit(1)
+	}
+
+	var chapter int
+	fmt.Sscanf(chapterStr, "%d", &chapter)
+
+	data := map[string]interface{}{
+		"manga_id": mangaID,
+		"chapter":  chapter,
+	}
+
+	resp, err := makeRequest("POST", "/notify/chapter", data, config.User.Token)
+	if err != nil {
+		fmt.Printf("✗ Failed to send notification: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✓ Notification sent successfully!")
+	if respData, ok := resp["data"].(map[string]interface{}); ok {
+		fmt.Printf("  Manga: %s\n", respData["manga_title"])
+		fmt.Printf("  Chapter: %.0f\n", respData["chapter"])
+	}
+	fmt.Println("\n📢 All subscribed clients will receive this notification")
+}
 
 // ===== CHAT =====
 func handleChat() {
@@ -1443,7 +1594,7 @@ func handleLogs() {
 
 func cmdLogsErrors() {
 	logFile := filepath.Join(config.Logging.Path, "server.log")
-	
+
 	if _, err := os.Stat(logFile); os.IsNotExist(err) {
 		fmt.Println("No log file found")
 		return
@@ -1458,7 +1609,7 @@ func cmdLogsErrors() {
 
 	fmt.Println("Recent Errors:")
 	fmt.Println("==============")
-	
+
 	scanner := bufio.NewScanner(file)
 	errorCount := 0
 	for scanner.Scan() {

@@ -10,8 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	"mangahub/internal/auth"
 	grpcServer "mangahub/internal/grpc"
 	"mangahub/internal/manga"
@@ -22,6 +20,9 @@ import (
 	"mangahub/pkg/database"
 	"mangahub/pkg/models"
 	pb "mangahub/proto/proto"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 )
 
@@ -142,12 +143,12 @@ func main() {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		
+
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
-		
+
 		c.Next()
 	})
 
@@ -192,6 +193,9 @@ func main() {
 		protected.POST("/library", mangaHandler.AddToLibrary)
 		protected.DELETE("/library/:id", mangaHandler.RemoveFromLibrary)
 		protected.PUT("/progress", mangaHandler.UpdateProgress)
+
+		// Admin-only notification endpoint
+		protected.POST("/notify/chapter", mangaHandler.SendNotification)
 	}
 
 	// WebSocket route
@@ -224,13 +228,13 @@ func main() {
 	go func() {
 		<-sigChan
 		log.Println("\n🛑 Shutting down MangaHub servers gracefully...")
-		
+
 		// Shutdown TCP server
 		tcpServer.Shutdown()
-		
+
 		// Close channels
 		close(progressBroadcast)
-		
+
 		log.Println("✅ All servers shut down successfully")
 		os.Exit(0)
 	}()
@@ -254,7 +258,7 @@ func main() {
 	log.Println("✅ HTTP API Server started successfully!")
 	log.Println("📡 Server is ready to accept connections...")
 	log.Println()
-	
+
 	if err := router.Run(httpPort); err != nil {
 		log.Fatalf("❌ Failed to start HTTP server: %v", err)
 	}

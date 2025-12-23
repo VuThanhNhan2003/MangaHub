@@ -29,7 +29,8 @@ func main() {
 	log.Printf("📢 UDP Notification Server starting on %s", port)
 	log.Println("🔔 Ready to broadcast notifications")
 	log.Println("📨 Clients can register to receive chapter updates")
-	
+	log.Println("💡 Use CLI or API to trigger notifications: mangahub notify send")
+
 	if err := server.Start(); err != nil {
 		log.Fatalf("Failed to start UDP server: %v", err)
 	}

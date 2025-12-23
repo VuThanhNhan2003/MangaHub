@@ -12,9 +12,10 @@ import (
 )
 
 type UDPClient struct {
-	Addr      *net.UDPAddr
-	UserID    string
-	LastSeen  time.Time
+	Addr        *net.UDPAddr
+	UserID      string
+	LastSeen    time.Time
+	Preferences map[string]bool // notification preferences
 }
 
 type Server struct {
@@ -89,25 +90,43 @@ func (s *Server) handleMessage(data []byte, addr *net.UDPAddr) {
 func (s *Server) handleRegister(msg map[string]interface{}, addr *net.UDPAddr) {
 	userID, ok := msg["user_id"].(string)
 	if !ok {
+		log.Printf("Registration failed: missing user_id")
 		return
 	}
 
 	clientKey := addr.String()
 
+	// Extract preferences
+	preferences := make(map[string]bool)
+	if prefs, ok := msg["preferences"].(map[string]interface{}); ok {
+		for k, v := range prefs {
+			if boolVal, ok := v.(bool); ok {
+				preferences[k] = boolVal
+			}
+		}
+	} else {
+		// Default preferences
+		preferences["chapter_releases"] = true
+		preferences["system_updates"] = true
+	}
+
 	s.mutex.Lock()
 	s.clients[clientKey] = &UDPClient{
-		Addr:     addr,
-		UserID:   userID,
-		LastSeen: time.Now(),
+		Addr:        addr,
+		UserID:      userID,
+		LastSeen:    time.Now(),
+		Preferences: preferences,
 	}
 	s.mutex.Unlock()
 
-	log.Printf("UDP client registered: %s (UserID: %s)", clientKey, userID)
+	log.Printf("UDP client registered: %s (UserID: %s) with preferences: %v", clientKey, userID, preferences)
 
 	// Send confirmation
 	response := map[string]interface{}{
-		"status":  "registered",
-		"message": "Successfully registered for notifications",
+		"status":      "registered",
+		"message":     "Successfully registered for notifications",
+		"preferences": preferences,
+		"timestamp":   time.Now().Unix(),
 	}
 	s.sendToClient(addr, response)
 }
@@ -147,30 +166,6 @@ func (s *Server) handlePing(addr *net.UDPAddr) {
 	s.sendToClient(addr, response)
 }
 
-// SendNotification broadcasts a notification to all registered clients
-func (s *Server) SendNotification(notification models.Notification) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-
-	data, err := json.Marshal(notification)
-	if err != nil {
-		log.Printf("Error marshaling notification: %v", err)
-		return
-	}
-
-	sentCount := 0
-	for _, client := range s.clients {
-		_, err := s.conn.WriteToUDP(data, client.Addr)
-		if err != nil {
-			log.Printf("Error sending notification to %s: %v", client.Addr, err)
-		} else {
-			sentCount++
-		}
-	}
-
-	log.Printf("Sent notification to %d clients", sentCount)
-}
-
 // SendNotificationToUser sends notification to specific user's clients
 func (s *Server) SendNotificationToUser(userID string, notification models.Notification) {
 	s.mutex.RLock()
@@ -195,6 +190,47 @@ func (s *Server) SendNotificationToUser(userID string, notification models.Notif
 	}
 
 	log.Printf("Sent notification to %d clients for user %s", sentCount, userID)
+}
+
+// SendChapterNotification broadcasts a chapter release notification
+func (s *Server) SendChapterNotification(mangaTitle string, chapter int, mangaID string) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	notification := map[string]interface{}{
+		"type":        "chapter_release",
+		"title":       "New Chapter Released! 🔔",
+		"message":     fmt.Sprintf("%s - Chapter %d is now available", mangaTitle, chapter),
+		"manga_id":    mangaID,
+		"manga_title": mangaTitle,
+		"chapter":     chapter,
+		"timestamp":   time.Now().Unix(),
+	}
+
+	data, err := json.Marshal(notification)
+	if err != nil {
+		log.Printf("Error marshaling chapter notification: %v", err)
+		return
+	}
+
+	sentCount := 0
+	failedCount := 0
+	for _, client := range s.clients {
+		// Check if client wants chapter release notifications
+		if enabled, exists := client.Preferences["chapter_releases"]; exists && !enabled {
+			continue
+		}
+
+		_, err := s.conn.WriteToUDP(data, client.Addr)
+		if err != nil {
+			log.Printf("Error sending notification to %s: %v", client.Addr, err)
+			failedCount++
+		} else {
+			sentCount++
+		}
+	}
+
+	log.Printf("Chapter notification sent: %s Ch.%d - Success: %d, Failed: %d", mangaTitle, chapter, sentCount, failedCount)
 }
 
 // sendToClient sends data to a specific client

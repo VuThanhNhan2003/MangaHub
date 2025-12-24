@@ -181,8 +181,8 @@ func main() {
 	// Public routes
 	public := router.Group("/api")
 	{
-		public.POST("/auth/register", userHandler.Register)
-		public.POST("/auth/login", userHandler.Login)
+		public.POST("/auth/register", userHandler.Register) // UC-001
+		public.POST("/auth/login", userHandler.Login) // UC-002
 		public.GET("/manga", mangaHandler.SearchManga)
 		public.GET("/manga/:id", mangaHandler.GetManga)
 	}

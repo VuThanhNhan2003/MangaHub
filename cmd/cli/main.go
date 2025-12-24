@@ -387,21 +387,21 @@ func cmdAuthRegister() {
 	fmt.Print("Password: ")
 	password := readPassword()
 
-	data := map[string]string{
+	data := map[string]string{ // Request payload JSON
 		"username": username,
 		"email":    email,
 		"password": password,
 	}
 
 	fmt.Println("\n🔄 Sending registration request via HTTP...")
-	resp, err := makeRequest("POST", "/auth/register", data, "")
+	resp, err := makeRequest("POST", "/auth/register", data, "") // Send HTTP request to http://localhost:8080/api/auth/register
 	if err != nil {
 		fmt.Printf("✗ Registration failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Println("✓ Account created successfully via HTTP!")
-	if respData, ok := resp["data"].(map[string]interface{}); ok {
+	if respData, ok := resp["data"].(map[string]interface{}); ok { // Receive response data JSON
 		fmt.Printf("  User ID: %s\n", respData["user_id"])
 		fmt.Printf("  Username: %s\n", respData["username"])
 	}
@@ -420,19 +420,19 @@ func cmdAuthLogin() {
 	fmt.Print("Password: ")
 	password := readPassword()
 
-	data := map[string]string{
+	data := map[string]string{ // Request payload JSON
 		"username": username,
 		"password": password,
 	}
 
 	fmt.Println("\n🔄 Authenticating via HTTP...")
-	resp, err := makeRequest("POST", "/auth/login", data, "")
+	resp, err := makeRequest("POST", "/auth/login", data, "") // Send HTTP request to http://localhost:8080/api/auth/login
 	if err != nil {
 		fmt.Printf("✗ Login failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	if respData, ok := resp["data"].(map[string]interface{}); ok {
+	if respData, ok := resp["data"].(map[string]interface{}); ok { // Receive response data JSON
 		if token, ok := respData["token"].(string); ok {
 			config.User.Token = token
 			config.User.Username = username

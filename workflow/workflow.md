@@ -727,9 +727,9 @@ Client disconnect (close/error)
 
 **Client Flow (CLI)**:
 ```
-cmd/cli/main.go::handleGRPC() hoặc handleManga() với --use-grpc
-  → cmdGRPCGet() hoặc cmdMangaInfoGRPC()
-    → Lấy manga_id từ flags
+cmd/cli/main.go::handleGRPC()
+  → cmdGRPCGet()
+    → Lấy manga_id từ flags: --manga-id
     → grpc.NewClient("localhost:9092", insecure credentials)
       → Establish gRPC connection
     → pb.NewMangaServiceClient(conn)
@@ -780,9 +780,9 @@ internal/grpc/server.go::GetManga()
 
 **Client Flow (CLI)**:
 ```
-cmd/cli/main.go::handleManga() với --use-grpc
-  → cmdMangaSearchGRPC()
-    → Parse query từ args
+cmd/cli/main.go::handleGRPC()
+  → cmdGRPCSearch()
+    → Parse query từ flags: --query
     → grpc.NewClient("localhost:9092")
     → pb.NewMangaServiceClient(conn)
     → context.WithTimeout(5s)

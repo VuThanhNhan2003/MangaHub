@@ -215,17 +215,11 @@ go run cmd/grpc-server/main.go
 ### Manga Management Commands
 
 ```bash
-# Search manga
+# Search manga (via HTTP)
 ./mangahub manga search <query>
 
-# Search manga using gRPC
-./mangahub manga search <query> --use-grpc
-
-# Get manga details
+# Get manga details (via HTTP)
 ./mangahub manga info <manga-id>
-
-# Get manga details using gRPC
-./mangahub manga info <manga-id> --use-grpc
 
 # List all manga
 ./mangahub manga list
@@ -235,7 +229,6 @@ go run cmd/grpc-server/main.go
 ```bash
 ./mangahub manga search naruto
 ./mangahub manga info naruto
-./mangahub manga search "Naruto" --use-grpc
 ```
 
 ### Library Management Commands
@@ -256,7 +249,7 @@ go run cmd/grpc-server/main.go
 
 **Examples:**
 ```bash
-./mangahub library add --manga-id one-piece --status reading
+./mangahub library add --manga-id naruto --status reading
 ./mangahub library list --status completed
 ./mangahub library remove naruto
 ```
@@ -280,7 +273,7 @@ go run cmd/grpc-server/main.go
 
 **Example:**
 ```bash
-./mangahub progress update --manga-id one-piece --chapter 1000
+./mangahub progress update --manga-id naruto --chapter 100
 ```
 
 ### TCP Synchronization Commands
@@ -302,7 +295,7 @@ go run cmd/grpc-server/main.go
 ./mangahub sync monitor
 
 # Terminal 2: Update progress (will broadcast to Terminal 1)
-./mangahub progress update --manga-id one-piece --chapter 50
+./mangahub progress update --manga-id naruto --chapter 50
 ```
 
 ### UDP Notification Commands
@@ -324,7 +317,7 @@ go run cmd/grpc-server/main.go
 ./mangahub notify subscribe
 
 # Terminal 2: Send notification (will appear in Terminal 1)
-./mangahub notify send --manga-id one-piece --chapter 1100
+./mangahub notify send --manga-id naruto --chapter 110
 ```
 
 ### WebSocket Chat Commands
@@ -367,6 +360,8 @@ go run cmd/grpc-server/main.go
 
 ### gRPC Operations Commands
 
+Use these commands to interact with the gRPC server instead of HTTP:
+
 ```bash
 # Get manga via gRPC
 ./mangahub grpc get --manga-id <id>
@@ -380,10 +375,12 @@ go run cmd/grpc-server/main.go
 
 **Examples:**
 ```bash
-./mangahub grpc get --manga-id one-piece
+./mangahub grpc get --manga-id naruto
 ./mangahub grpc search --query "Demon Slayer"
 ./mangahub grpc update --manga-id naruto --chapter 700
 ```
+
+**Note:** These commands provide the same functionality as `manga search/info` but use gRPC protocol instead of HTTP REST API.
 
 ### Server Management Commands
 
@@ -446,7 +443,7 @@ curl "http://localhost:8080/api/manga?query=One"
 
 **Get Manga by ID:**
 ```bash
-curl http://localhost:8080/api/manga/one-piece
+curl http://localhost:8080/api/manga/naruto
 ```
 
 **Get Library (requires authentication):**
@@ -460,7 +457,7 @@ curl http://localhost:8080/api/library \
 curl -X PUT http://localhost:8080/api/progress \
   -H "Authorization: Bearer <your-token>" \
   -H "Content-Type: application/json" \
-  -d '{"manga_id":"one-piece","chapter":100}'
+  -d '{"manga_id":"naruto","chapter":100}'
 ```
 
 ### Using netcat (TCP/UDP Testing)
@@ -601,10 +598,10 @@ go run cmd/server/main.go
 ./mangahub manga search "One Piece"
 
 # 6. Add to library
-./mangahub library add --manga-id one-piece --status reading
+./mangahub library add --manga-id naruto --status reading
 
 # 7. Update progress
-./mangahub progress update --manga-id one-piece --chapter 10
+./mangahub progress update --manga-id naruto --chapter 10
 
 # 8. View library
 ./mangahub library list

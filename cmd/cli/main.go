@@ -447,30 +447,18 @@ func cmdAuthLogin() {
 	fmt.Println("\n💡 Your session is now authenticated for HTTP, TCP, gRPC, and WebSocket")
 }
 
-// ===== MANGA (UC-003, UC-004) - HTTP & gRPC =====
+// ===== MANGA (UC-003, UC-004) - HTTP =====
 func handleManga() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: mangahub manga <search|info|list>")
-		fmt.Println("\nOptions:")
-		fmt.Println("  --use-grpc    Use gRPC instead of HTTP")
 		os.Exit(1)
 	}
 
-	useGRPC := hasFlag("--use-grpc")
-
 	switch os.Args[2] {
 	case "search":
-		if useGRPC {
-			cmdMangaSearchGRPC() // UC-015: Search Manga via gRPC
-		} else {
-			cmdMangaSearch() // UC-003: Search Manga via HTTP
-		}
+		cmdMangaSearch() // UC-003: Search Manga via HTTP
 	case "info":
-		if useGRPC {
-			cmdMangaInfoGRPC() // UC-014: Retrieve Manga via gRPC
-		} else {
-			cmdMangaInfo() // UC-004: View Manga Details via HTTP
-		}
+		cmdMangaInfo() // UC-004: View Manga Details via HTTP
 	case "list":
 		cmdMangaList() // List manga in library
 	}
@@ -513,59 +501,8 @@ func cmdMangaSearch() {
 					manga["id"], manga["author"], manga["status"], manga["total_chapters"])
 			}
 			fmt.Println("\n💡 Use 'mangahub manga info <id>' for details")
-			fmt.Println("💡 Add --use-grpc to search via gRPC instead")
+			fmt.Println("💡 Use 'mangahub grpc search --query <text>' for gRPC instead")
 		}
-	}
-}
-
-// Workflow of UC-015: cmdMangaSearchGRPC -> Input query -> gRPC request -> Handle response
-// Send gRPC request to SearchManga (see internal/grpc/server.go)
-func cmdMangaSearchGRPC() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub manga search <query> --use-grpc")
-		os.Exit(1)
-	}
-
-	query := strings.Join(os.Args[3:], " ")
-	query = strings.ReplaceAll(query, "--use-grpc", "")
-	query = strings.TrimSpace(query)
-
-	fmt.Printf("🔍 Searching via gRPC: %s\n", query)
-
-	conn, err := grpc.NewClient(
-		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		fmt.Printf("✗ gRPC connection failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
-	client := pb.NewMangaServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := client.SearchManga(ctx, &pb.SearchRequest{
-		Query:  query,
-		Limit:  10,
-		Offset: 0,
-	})
-	if err != nil {
-		fmt.Printf("✗ gRPC request failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(resp.Mangas) == 0 {
-		fmt.Println("No results found")
-		return
-	}
-
-	fmt.Printf("\n✓ Found %d results via gRPC:\n\n", len(resp.Mangas))
-	for i, manga := range resp.Mangas {
-		fmt.Printf("%d. %s\n", i+1, manga.Title)
-		fmt.Printf("   ID: %s | Author: %s | Status: %s | Chapters: %d\n",
-			manga.Id, manga.Author, manga.Status, manga.TotalChapters)
 	}
 }
 
@@ -573,7 +510,7 @@ func cmdMangaSearchGRPC() {
 // Send HTTP request to /manga/{id} (see internal/manga/handler.go)
 func cmdMangaInfo() {
 	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub manga info <manga-id> [--use-grpc]")
+		fmt.Println("Usage: mangahub manga info <manga-id>")
 		os.Exit(1)
 	}
 
@@ -612,56 +549,7 @@ func cmdMangaInfo() {
 			}
 		}
 	}
-	fmt.Println("\n💡 Add --use-grpc to fetch via gRPC instead")
-}
-
-// Workflow of UC-014: cmdMangaInfoGRPC -> Input manga ID -> gRPC request -> Handle response
-// Send gRPC request to GetManga (see internal/grpc/server.go)
-func cmdMangaInfoGRPC() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub manga info <manga-id> --use-grpc")
-		os.Exit(1)
-	}
-
-	mangaID := os.Args[3]
-
-	fmt.Printf("📖 Fetching manga info via gRPC: %s\n", mangaID)
-
-	conn, err := grpc.NewClient(
-		fmt.Sprintf("%s:%d", config.Server.Host, config.Server.GRPCPort),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		fmt.Printf("✗ gRPC connection failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
-	client := pb.NewMangaServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := client.GetManga(ctx, &pb.GetMangaRequest{MangaId: mangaID})
-	if err != nil {
-		fmt.Printf("✗ gRPC request failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("\n%s\n", resp.Title)
-	fmt.Println(strings.Repeat("=", len(resp.Title)))
-	fmt.Printf("ID: %s\n", resp.Id)
-	fmt.Printf("Author: %s\n", resp.Author)
-	fmt.Printf("Status: %s\n", resp.Status)
-	fmt.Printf("Chapters: %d\n", resp.TotalChapters)
-	if resp.Year > 0 {
-		fmt.Printf("Year: %d\n", resp.Year)
-	}
-	if len(resp.Genres) > 0 {
-		fmt.Printf("Genres: %s\n", strings.Join(resp.Genres, ", "))
-	}
-	if resp.Description != "" {
-		fmt.Printf("\n%s\n", resp.Description)
-	}
+	fmt.Println("\n💡 Use 'mangahub grpc get --manga-id <id>' for gRPC instead")
 }
 
 // Workflow: cmdMangaList -> HTTP request to /manga -> Handle response

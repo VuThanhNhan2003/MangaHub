@@ -8,6 +8,8 @@ import (
 	"mangahub/pkg/database"
 )
 
+// Workflow: main -> Initialize DB -> Clear existing data -> Import from JSON -> Display summary
+
 func main() {
 	log.Println("╔════════════════════════════════════════════════════════╗")
 	log.Println("║        Import Manga Data to Database                  ║")

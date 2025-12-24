@@ -13,6 +13,9 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
+// Workflow: main -> getManualData, fetchFromMangaDex, practiceWebScraping -> saveToJSON -> printStatistics
+
+
 // Manga represents a manga entry
 type Manga struct {
 	ID            string   `json:"id"`
@@ -70,23 +73,23 @@ func main() {
 	log.Println("║      MangaHub Data Collection Script                  ║")
 	log.Println("╚════════════════════════════════════════════════════════╝")
 
-	var allManga []Manga
+	var allManga []Manga // Slice to hold all manga entries
 
 	// 1. Manual Entry Data (100 series)
 	log.Println("\n📝 Step 1/3: Loading manual entry data...")
-	manualData := getManualData()
-	allManga = append(allManga, manualData...)
+	manualData := getManualData() // Function to return hardcoded manga data
+	allManga = append(allManga, manualData...) // Append data
 	log.Printf("✅ Loaded %d manga from manual entry\n", len(manualData))
 
 	// 2. MangaDex API Integration (100 series)
 	log.Println("\n🌐 Step 2/3: Fetching from MangaDex API...")
-	mangadexData := fetchFromMangaDex(100)
-	allManga = append(allManga, mangadexData...)
+	mangadexData := fetchFromMangaDex(100) // Fetch 100 manga from MangaDex API
+	allManga = append(allManga, mangadexData...) 
 	log.Printf("✅ Fetched %d manga from MangaDex API\n", len(mangadexData))
 
 	// 3. Web Scraping (Educational)
 	log.Println("\n🕷️  Step 3/3: Web scraping practice...")
-	scrapedData := practiceWebScraping()
+	scrapedData := practiceWebScraping() // Scrape manga data from practice sites
 	allManga = append(allManga, scrapedData...)
 	log.Printf("✅ Scraped %d entries from practice sites\n", len(scrapedData))
 
@@ -244,6 +247,8 @@ func getManualData() []Manga {
 }
 
 // fetchFromMangaDex fetches manga from MangaDex API
+// Workflow: Khởi tạo -> Lặp để lấy dữ liệu theo lô -> Xử lý dữ liệu 
+// -> Tạm dừng để tuân thủ giới hạn tốc độ -> Kết thúc khi đủ dữ liệu
 func fetchFromMangaDex(limit int) []Manga {
 	var allManga []Manga
 	baseURL := "https://api.mangadex.org/manga"
@@ -252,9 +257,9 @@ func fetchFromMangaDex(limit int) []Manga {
 	batchSize := 20 // Reduced batch size to be more respectful
 	offset := 0
 	
-	for len(allManga) < limit && offset < limit*2 {
+	for len(allManga) < limit && offset < limit*2 { 
 		url := fmt.Sprintf("%s?limit=%d&offset=%d&includes[]=author&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&order[relevance]=desc", 
-			baseURL, batchSize, offset)
+			baseURL, batchSize, offset) // Fetch safe and suggestive content only
 		
 		log.Printf("   Fetching batch: offset=%d (collected: %d/%d)...", offset, len(allManga), limit)
 		
@@ -423,6 +428,7 @@ func practiceWebScraping() []Manga {
 }
 
 // scrapeQuoteSite scrapes quotes.toscrape.com as educational practice
+// Workflow: Truy cập trang web -> Phân tích HTML -> Trích xuất dữ liệu -> Tạo manga giả tưởng
 func scrapeQuoteSite() []Manga {
 	var manga []Manga
 	
@@ -477,6 +483,7 @@ func scrapeQuoteSite() []Manga {
 }
 
 // testHTTPBin tests httpbin.org API endpoints
+// Workflow: Gửi yêu cầu HTTP -> Phân tích phản hồi -> Tạo manga giả tưởng
 func testHTTPBin() []Manga {
 	var manga []Manga
 
@@ -527,6 +534,7 @@ func testHTTPBin() []Manga {
 }
 
 // saveToJSON saves manga data to JSON file
+// Workflow: Mở tệp -> Mã hóa dữ liệu -> Ghi vào tệp -> Đóng tệp
 func saveToJSON(manga []Manga, filename string) error {
 	// Ensure directory exists
 	if err := os.MkdirAll("data", 0755); err != nil {
@@ -550,6 +558,7 @@ func saveToJSON(manga []Manga, filename string) error {
 }
 
 // printStatistics displays collection statistics
+// Workflow: Phân tích dữ liệu -> Đếm theo nguồn, thể loại, trạng thái -> Hiển thị thống kê
 func printStatistics(manga []Manga) {
 	log.Println("\n╔════════════════════════════════════════════════════════╗")
 	log.Println("║              Collection Statistics                     ║")

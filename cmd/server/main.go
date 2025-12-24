@@ -32,6 +32,9 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// Main entry point for MangaHub server suite
+// Workflow: main -> Initialize DB -> Seed Data -> Start TCP, UDP, gRPC, HTTP API Servers
+
 func main() {
 	// Configuration
 	dbPath := getEnv("DB_PATH", "./data/mangahub.db")

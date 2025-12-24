@@ -131,7 +131,7 @@ Commands:
 }
 
 // ===== INIT =====
-func cmdInit() {
+func cmdInit() { // Initialize configuration
 	homeDir, _ := os.UserHomeDir()
 	mangahubDir := filepath.Join(homeDir, ".mangahub")
 
@@ -160,6 +160,191 @@ func cmdInit() {
 }
 
 // ===== AUTH (UC-001, UC-002) - HTTP =====
+/*
+UC-001: User Registration
+Primary Actor: Manga Reader
+Goal: Create a new user account
+Preconditions: None
+Postconditions: User account is created
+Main Success Scenario: 1. User provides username, email, and password
+2. System validates input format and uniqueness
+3. System hashes password using bcrypt
+4. System creates user record in SQLite database
+5. System returns success confirmation
+Alternative Flows: - A1: Username already exists - System returns error message
+• A2: Invalid email format - System requests valid email
+• A3: Weak password - System displays password requirements
+UC-002: User Authentication
+Primary Actor: Manga Reader
+Goal: Login to access personalized features
+Preconditions: User has valid account
+Postconditions: User is authenticated with JWT token
+Main Success Scenario: 1. User provides username/email and password
+2. System validates credentials against database
+3. System generates JWT token with user information
+4. System returns token for subsequent requests
+5. User can access protected endpoints
+Alternative Flows: - A1: Invalid credentials - System returns authentication error
+• A2: Account not found - System suggests registration
+UC-003: Search Manga
+Primary Actor: Manga Reader
+Goal: Find manga series using search criteria
+Preconditions: System has manga database populated
+Postconditions: Relevant manga results are displayed
+Main Success Scenario: 1. User enters search query (title or author)
+2. System queries SQLite database using LIKE patterns
+3. System applies basic filters (genre, status) if provided
+4. System returns paginated results with basic information
+5. User can select manga for detailed view
+Alternative Flows: - A1: No results found - System displays “no results” message
+• A2: Database error - System logs error and returns generic message
+UC-004: View Manga Details
+Primary Actor: Manga Reader
+Goal: Access detailed information about specific manga
+Preconditions: Manga exists in database
+Postconditions: Complete manga information is displayed
+Main Success Scenario: 1. User selects manga from search results or direct URL
+2. System retrieves manga details from database
+3. System displays title, author, genres, description, chapter count
+4. System shows user’s current progress if logged in
+5. User can add manga to library or update progress
+UC-005: Add Manga to Library
+Primary Actor: Manga Reader
+Goal: Add manga to personal reading library
+Preconditions: User is authenticated, manga exists
+Postconditions: Manga is added to user’s library
+Main Success Scenario: 1. User clicks “Add to Library” from manga details
+2. System presents status options (Reading, Completed, Plan to Read)
+3. User selects initial status and current chapter
+4. System creates user_progress record in database
+5. System confirms addition and updates UI
+Alternative Flows: - A1: Manga already in library - System offers to update status
+• A2: Database error - System logs error and shows retry option
+UC-006: Update Reading Progress
+Primary Actor: Manga Reader
+Goal: Track current reading progress
+Preconditions: Manga is in user’s library
+Postconditions: Progress is updated locally and broadcasted
+Main Success Scenario: 1. User updates current chapter number
+2. System validates chapter number against manga metadata
+3. System updates user_progress record with timestamp
+4. System triggers TCP broadcast to connected clients
+5. System confirms update to user
+Alternative Flows: - A1: Invalid chapter number - System shows validation error
+• A2: TCP server unavailable - System updates locally, queues broadcast
+UC-007: Connect to TCP Sync Server
+Primary Actor: TCP Client
+Goal: Establish connection for real-time progress updates
+Preconditions: TCP server is running
+Postconditions: Client is connected and registered
+Main Success Scenario: 1. Client initiates TCP connection to server
+2. Server accepts connection and creates goroutine handler
+3. Client sends authentication message with user credentials
+4. Server validates user and adds connection to active list
+5. Server confirms successful registration
+Alternative Flows: - A1: Authentication fails - Server closes connection
+• A2: Server at capacity - Server rejects connection with error
+UC-008: Broadcast Progress Update
+Primary Actor: System (Automated)
+Secondary Actor: TCP Client
+Goal: Notify connected clients of progress changes
+Preconditions: TCP server has active connections
+Postconditions: All relevant clients receive update
+Main Success Scenario: 1. System receives progress update from HTTP API
+2. TCP server receives broadcast message via channel
+3. Server identifies connections for the specific user
+4. Server sends JSON progress message to connections
+5. Clients receive and process update
+Alternative Flows: - A1: Client connection lost - Server removes from active list
+• A2: Send fails - Server logs error and continues with other clients
+UC-009: Register for UDP Notifications
+Primary Actor: UDP Client
+Goal: Register to receive chapter release notifications
+Preconditions: UDP server is running
+Postconditions: Client is registered for notifications
+Main Success Scenario: 1. Client sends UDP registration packet with user preferences
+2. Server receives registration and extracts client address
+3. Server adds client to notification list
+4. Server sends confirmation packet to client
+5. Client is ready to receive notifications
+UC-010: Send Chapter Release Notification
+Primary Actor: System Administrator
+Goal: Notify users about new chapter releases
+Preconditions: UDP server has registered clients
+Postconditions: Notification is broadcasted to clients
+Main Success Scenario: 1. Administrator triggers notification for specific manga
+2. System creates notification message with manga details
+3. UDP server broadcasts message to all registered clients
+4. Clients receive notification and display to users
+5. System logs successful broadcast
+Alternative Flows: - A1: Client unreachable - Server continues with other clients
+• A2: Network error - Server logs error and retries
+UC-011: Join Chat
+Primary Actor: Chat User
+Goal: Connect to real-time chat system
+Preconditions: User is authenticated, WebSocket server running
+Postconditions: User is connected to chat
+Main Success Scenario: 1. User’s browser initiates WebSocket connection
+2. Server upgrades HTTP connection to WebSocket
+3. Client sends join message with user credentials
+4. Server validates user and adds to active connections
+5. Server broadcasts user join notification to other users
+6. User receives recent chat history
+UC-012: Send Chat Message
+Primary Actor: Chat User
+Goal: Send message to other connected users
+Preconditions: User is connected to chat
+Postconditions: Message is broadcasted to all users
+Main Success Scenario: 1. User types message and clicks send
+2. Client sends message via WebSocket connection
+3. Server receives message and validates user
+4. Server broadcasts message to all connected clients
+5. All users receive and display the message
+Alternative Flows: - A1: Message too long - Server returns error to sender
+• A2: User not authenticated - Server rejects message
+UC-013: Handle User Disconnection
+Primary Actor: System (Automated)
+Goal: Clean up when user leaves chat
+Preconditions: User was connected to chat
+Postconditions: User is removed from active connections
+Main Success Scenario: 1. System detects WebSocket connection closure
+2. Server removes connection from active list
+3. Server broadcasts user leave notification
+4. Other users see updated participant list
+5. Connection resources are cleaned up
+UC-014: Retrieve Manga via gRPC
+Primary Actor: Internal Service
+Goal: Fetch manga data through gRPC interface
+Preconditions: gRPC server is running
+Postconditions: Manga data is returned
+Main Success Scenario: 1. Client service calls GetManga gRPC method
+2. gRPC server receives request with manga ID
+3. Server queries database for manga information
+4. Server constructs protobuf response message
+5. Server returns manga data to client
+UC-015: Search Manga via gRPC
+Primary Actor: Internal Service
+Goal: Search manga using gRPC interface
+Preconditions: gRPC server is running, database populated
+Postconditions: Search results are returned
+Main Success Scenario: 1. Client calls SearchManga with search criteria
+2. gRPC server processes search parameters
+3. Server executes database query with filters
+4. Server constructs response with result list
+5. Server returns paginated results to client
+UC-016: Update Progress via gRPC
+Primary Actor: Internal Service
+Goal: Update user reading progress through gRPC
+Preconditions: User and manga exist
+Postconditions: Progress is updated in database
+Main Success Scenario: 1. Client calls UpdateProgress with user and manga data
+2. gRPC server validates request parameters
+3. Server updates user_progress table
+4. Server triggers TCP broadcast for real-time sync
+5. Server returns success confirmation
+*/
+// Workflow: handleAuth -> cmdAuthRegister or cmdAuthLogin -> makeRequest -> saveConfig
+
 func handleAuth() {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: mangahub auth <register|login|logout|status>")
@@ -168,10 +353,10 @@ func handleAuth() {
 
 	switch os.Args[2] {
 	case "register":
-		cmdAuthRegister()
-	case "login":
-		cmdAuthLogin()
-	case "logout":
+		cmdAuthRegister() // UC-001: User Registration
+	case "login": 
+		cmdAuthLogin() // UC-002: User Authentication
+	case "logout": // Simple logout by clearing token
 		config.User = struct {
 			Username string `yaml:"username"`
 			Token    string `yaml:"token"`
@@ -188,6 +373,8 @@ func handleAuth() {
 	}
 }
 
+// Workflow of UC-001: cmdAuthRegister -> Input username, email, password -> Send HTTP request to /auth/register -> Handle response
+// Send HTTP request to /auth/register (see internal/user/handler.go)
 func cmdAuthRegister() {
 	username := getFlag("--username")
 	email := getFlag("--email")
@@ -221,6 +408,8 @@ func cmdAuthRegister() {
 	fmt.Printf("\nNext: mangahub auth login --username %s\n", username)
 }
 
+// Workflow of UC-002: cmdAuthLogin -> Input username, password -> Send HTTP request to /auth/login -> Handle response
+// Send HTTP request to /auth/login (see internal/user/handler.go)
 func cmdAuthLogin() {
 	username := getFlag("--username")
 	if username == "" {
@@ -272,21 +461,23 @@ func handleManga() {
 	switch os.Args[2] {
 	case "search":
 		if useGRPC {
-			cmdMangaSearchGRPC()
+			cmdMangaSearchGRPC() // UC-015: Search Manga via gRPC
 		} else {
-			cmdMangaSearch()
+			cmdMangaSearch() // UC-003: Search Manga via HTTP
 		}
 	case "info":
 		if useGRPC {
-			cmdMangaInfoGRPC()
+			cmdMangaInfoGRPC() // UC-014: Retrieve Manga via gRPC
 		} else {
-			cmdMangaInfo()
+			cmdMangaInfo() // UC-004: View Manga Details via HTTP
 		}
 	case "list":
-		cmdMangaList()
+		cmdMangaList() // List manga in library
 	}
 }
 
+// Workflow of UC-003: cmdMangaSearch -> Input query -> HTTP request to /manga?query= -> Handle response
+// Send HTTP request to /manga (see internal/manga/handler.go)
 func cmdMangaSearch() {
 	if len(os.Args) < 4 {
 		fmt.Println("Usage: mangahub manga search <query> [--use-grpc]")
@@ -327,6 +518,8 @@ func cmdMangaSearch() {
 	}
 }
 
+// Workflow of UC-015: cmdMangaSearchGRPC -> Input query -> gRPC request -> Handle response
+// Send gRPC request to SearchManga (see internal/grpc/server.go)
 func cmdMangaSearchGRPC() {
 	if len(os.Args) < 4 {
 		fmt.Println("Usage: mangahub manga search <query> --use-grpc")
@@ -376,6 +569,8 @@ func cmdMangaSearchGRPC() {
 	}
 }
 
+// Workflow of UC-004: cmdMangaInfo -> Input manga ID -> HTTP request to /manga/{id} -> Handle response
+// Send HTTP request to /manga/{id} (see internal/manga/handler.go)
 func cmdMangaInfo() {
 	if len(os.Args) < 4 {
 		fmt.Println("Usage: mangahub manga info <manga-id> [--use-grpc]")
@@ -420,6 +615,8 @@ func cmdMangaInfo() {
 	fmt.Println("\n💡 Add --use-grpc to fetch via gRPC instead")
 }
 
+// Workflow of UC-014: cmdMangaInfoGRPC -> Input manga ID -> gRPC request -> Handle response
+// Send gRPC request to GetManga (see internal/grpc/server.go)
 func cmdMangaInfoGRPC() {
 	if len(os.Args) < 4 {
 		fmt.Println("Usage: mangahub manga info <manga-id> --use-grpc")
@@ -467,6 +664,8 @@ func cmdMangaInfoGRPC() {
 	}
 }
 
+// Workflow: cmdMangaList -> HTTP request to /manga -> Handle response
+// Send HTTP request to /manga (see internal/manga/handler.go)
 func cmdMangaList() {
 	fmt.Println("📚 Fetching all manga via HTTP...")
 	resp, err := makeRequest("GET", "/manga", nil, "")
@@ -498,14 +697,16 @@ func handleLibrary() {
 
 	switch os.Args[2] {
 	case "list":
-		cmdLibraryList()
+		cmdLibraryList() // List library entries
 	case "add":
-		cmdLibraryAdd()
+		cmdLibraryAdd() // UC-005: Add Manga to Library
 	case "remove":
-		cmdLibraryRemove()
+		cmdLibraryRemove() // Remove manga from library
 	}
 }
 
+// Workflow: cmdLibraryList -> HTTP request to /library -> Handle response
+// Send HTTP request to /library (see internal/manga/handler.go)
 func cmdLibraryList() {
 	status := getFlag("--status")
 	url := "/library"
@@ -514,14 +715,14 @@ func cmdLibraryList() {
 	}
 
 	fmt.Println("📚 Fetching your library via HTTP...")
-	resp, err := makeRequest("GET", url, nil, config.User.Token)
+	resp, err := makeRequest("GET", url, nil, config.User.Token) // Authenticated GET request
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	if data, ok := resp["data"].(map[string]interface{}); ok {
-		if library, ok := data["library"].([]interface{}); ok {
+		if library, ok := data["library"].([]interface{}); ok { // List of library entries
 			if len(library) == 0 {
 				fmt.Println("Your library is empty")
 				fmt.Println("\n💡 Use 'mangahub library add --manga-id <id> --status reading' to add manga")
@@ -529,7 +730,7 @@ func cmdLibraryList() {
 			}
 
 			fmt.Printf("\n✓ Your Library (%d entries)\n\n", len(library))
-			for i, entry := range library {
+			for i, entry := range library { // Each entry contains manga and progress
 				e := entry.(map[string]interface{})
 				manga := e["manga"].(map[string]interface{})
 				progress := e["progress"].(map[string]interface{})
@@ -546,6 +747,8 @@ func cmdLibraryList() {
 	}
 }
 
+// Workflow of UC-005: cmdLibraryAdd -> Input manga ID, status -> HTTP request to /library -> Handle response
+// Send HTTP request to /library (see internal/manga/handler.go)
 func cmdLibraryAdd() {
 	mangaID := getFlag("--manga-id")
 	status := getFlag("--status")
@@ -556,7 +759,7 @@ func cmdLibraryAdd() {
 		os.Exit(1)
 	}
 
-	data := map[string]interface{}{
+	data := map[string]interface{}{ // Request payload
 		"manga_id":        mangaID,
 		"status":          status,
 		"current_chapter": 0,
@@ -564,7 +767,7 @@ func cmdLibraryAdd() {
 	}
 
 	fmt.Printf("📚 Adding manga to library via HTTP...\n")
-	_, err := makeRequest("POST", "/library", data, config.User.Token)
+	_, err := makeRequest("POST", "/library", data, config.User.Token) // Authenticated POST request
 	if err != nil {
 		fmt.Printf("✗ Failed: %v\n", err)
 		os.Exit(1)

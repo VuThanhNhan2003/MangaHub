@@ -851,6 +851,19 @@ internal/grpc/server.go::UpdateProgress()
       → UPDATE user_progress SET current_chapter=?, updated_at=?
       → WHERE user_id=? AND manga_id=?
   → Nếu error: Return pb.UpdateProgressResponse{Success: false, Message}
+  → Broadcast progress update via TCP (non-blocking):
+    → Tạo models.ProgressUpdate{
+        UserID: req.UserId,
+        MangaID: req.MangaId,
+        Chapter: int(req.Chapter),
+        Timestamp: time.Now().Unix()
+      }
+    → select {
+        case s.progressBroadcast <- update:
+        default:
+      }
+      → Channel được connect tới TCP server
+      → tcpServer.handleBroadcasts() nhận và broadcast tới all TCP clients
   → Return pb.UpdateProgressResponse{
       Success: true,
       Message: "progress updated successfully",
@@ -859,13 +872,9 @@ internal/grpc/server.go::UpdateProgress()
     }
 ```
 
-**Note**: gRPC UpdateProgress hiện tại chưa trigger TCP broadcast như HTTP endpoint. Nếu cần, phải thêm logic:
-```
-Sau khi UpdateProgress thành công:
-  → Tạo models.ProgressUpdate
-  → Gửi vào progressBroadcast channel
-  → TCP server nhận và broadcast
-```
+**Cross-Protocol Interaction**:
+- gRPC request trigger → TCP broadcast → All connected TCP clients nhận update
+- Tương tự như HTTP endpoint (UC-006), gRPC cũng trigger TCP broadcast
 
 ---
 
@@ -875,6 +884,15 @@ Sau khi UpdateProgress thành công:
 ```
 UC-006: HTTP UpdateProgress
   → mangaHandler.UpdateProgress()
+    → progressBroadcast <- update (channel)
+      → tcpServer.handleBroadcasts() (goroutine)
+        → Broadcast tới all TCP clients của user
+```
+
+### gRPC → TCP Broadcast
+```
+UC-016: gRPC UpdateProgress
+  → grpcServer.UpdateProgress()
     → progressBroadcast <- update (channel)
       → tcpServer.handleBroadcasts() (goroutine)
         → Broadcast tới all TCP clients của user
@@ -895,17 +913,18 @@ UC-010: HTTP SendNotification (admin)
 
 ### Multi-Protocol Flow Example
 ```
-User updates progress via HTTP:
+User updates progress via HTTP hoặc gRPC:
   1. CLI: makeRequest("PUT", "/progress") [HTTP]
-  2. Server: mangaHandler.UpdateProgress()
+     hoặc: client.UpdateProgress() [gRPC]
+  2. Server: mangaHandler.UpdateProgress() hoặc grpcServer.UpdateProgress()
      - Database: UPDATE user_progress [SQLite]
      - Channel: progressBroadcast <- update [Go channel]
-     - UDP: SendNotificationToUser() [UDP packet]
+     - UDP: SendNotificationToUser() [UDP packet] (chỉ HTTP)
   3. TCP Server: handleBroadcasts() nhận từ channel
      - Broadcast tới all TCP clients [TCP packets]
   4. CLI monitoring: cmdSyncMonitor() nhận update [TCP]
      - Display: "Progress Update: Chapter 15"
-  5. CLI subscribed: cmdNotifySubscribe() nhận notification [UDP]
+  5. CLI subscribed: cmdNotifySubscribe() nhận notification [UDP] (nếu HTTP)
      - Display: "Updated progress to chapter 15"
 ```
 

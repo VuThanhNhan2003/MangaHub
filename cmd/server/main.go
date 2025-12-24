@@ -128,7 +128,7 @@ func main() {
 		}
 
 		grpcSrv := grpc.NewServer()
-		server := grpcServer.NewServer(mangaRepo)
+		server := grpcServer.NewServer(mangaRepo, progressBroadcast)
 		pb.RegisterMangaServiceServer(grpcSrv, server)
 
 		log.Printf("✅ gRPC Internal Service started on %s", grpcPort)

@@ -199,8 +199,34 @@ func main() {
 	}
 
 	// WebSocket route
+	router.GET("/ws", func(c *gin.Context) {
+		username := c.Query("username")
+		room := c.Query("room")
+
+		// Validate required parameters
+		if username == "" || room == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username and room required"})
+			return
+		}
+
+		// Upgrade HTTP connection to WebSocket
+		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			log.Printf("Failed to upgrade: %v", err)
+			return
+		}
+
+		ws.ServeWs(chatHub, conn, username, room)
+	})
+
+	// Legacy WebSocket route with token (for backward compatibility)
 	router.GET("/ws/chat", func(c *gin.Context) {
 		token := c.Query("token")
+		room := c.Query("room")
+		if room == "" {
+			room = "general" // Default room
+		}
+
 		if token == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "token required"})
 			return
@@ -218,7 +244,7 @@ func main() {
 			return
 		}
 
-		ws.ServeWs(chatHub, conn, claims.UserID, claims.Username)
+		ws.ServeWs(chatHub, conn, claims.Username, room)
 	})
 
 	// Graceful shutdown
@@ -247,7 +273,7 @@ func main() {
 	log.Printf("║ 🔄 TCP Sync:      tcp://localhost%s                      ║\n", tcpPort)
 	log.Printf("║ 📢 UDP Notify:    udp://localhost%s                      ║\n", udpPort)
 	log.Printf("║ ⚡ gRPC Service:  grpc://localhost%s                     ║\n", grpcPort)
-	log.Printf("║ 💬 WebSocket:     ws://localhost%s/ws/chat              ║\n", httpPort)
+	log.Printf("║ 💬 WebSocket:     ws://localhost%s/ws                   ║\n", httpPort)
 	log.Println("╠════════════════════════════════════════════════════════════╣")
 	log.Println("║ 📊 Health Check:  http://localhost:8080/health            ║")
 	log.Println("║ 📈 Statistics:    http://localhost:8080/stats             ║")

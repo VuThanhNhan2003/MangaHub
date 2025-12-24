@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -382,7 +383,7 @@ func cmdMangaInfo() {
 	}
 
 	mangaID := os.Args[3]
-	
+
 	fmt.Printf("📖 Fetching manga info via HTTP: %s\n", mangaID)
 	resp, err := makeRequest("GET", "/manga/"+mangaID, nil, config.User.Token)
 	if err != nil {
@@ -580,7 +581,7 @@ func cmdLibraryRemove() {
 	}
 
 	mangaID := os.Args[3]
-	
+
 	fmt.Printf("📚 Removing manga from library via HTTP...\n")
 	_, err := makeRequest("DELETE", "/library/"+mangaID, nil, config.User.Token)
 	if err != nil {
@@ -637,7 +638,7 @@ func cmdProgressUpdate() {
 		fmt.Printf("  Manga: %s\n", data["manga_title"])
 		fmt.Printf("  Chapter: %.0f\n", data["chapter"])
 	}
-	
+
 	fmt.Println("\n💡 This update will be broadcasted to all your connected TCP clients")
 	fmt.Println("💡 Use 'mangahub sync monitor' to see real-time updates")
 }
@@ -663,7 +664,7 @@ func handleSync() {
 
 func cmdSyncConnect() {
 	fmt.Printf("🔄 Connecting to TCP sync server at %s:%d...\n", config.Server.Host, config.Server.TCPPort)
-	
+
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.TCPPort))
 	if err != nil {
 		fmt.Printf("✗ TCP connection failed: %v\n", err)
@@ -692,14 +693,14 @@ func cmdSyncConnect() {
 	fmt.Printf("  Status: %s\n", resp["status"])
 	fmt.Printf("  Message: %s\n", resp["message"])
 	fmt.Printf("  Client ID: %s\n", resp["client_id"])
-	
+
 	fmt.Println("\n💡 Connection established. You will now receive real-time progress updates")
 	fmt.Println("💡 Use 'mangahub sync monitor' to keep the connection alive and monitor updates")
 }
 
 func cmdSyncMonitor() {
 	fmt.Printf("🔄 Connecting to TCP sync server for monitoring...\n")
-	
+
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.Server.Host, config.Server.TCPPort))
 	if err != nil {
 		fmt.Printf("✗ TCP connection failed: %v\n", err)
@@ -717,7 +718,7 @@ func cmdSyncMonitor() {
 	confirmData, _ := reader.ReadBytes('\n')
 	var confirm map[string]interface{}
 	json.Unmarshal(confirmData, &confirm)
-	
+
 	fmt.Println("✓ Connected to TCP sync server")
 	fmt.Printf("  Client ID: %s\n", confirm["client_id"])
 	fmt.Println("\n📡 Monitoring real-time progress updates... (Press Ctrl+C to exit)\n")
@@ -982,23 +983,91 @@ func cmdNotifySend() {
 // ===== CHAT (UC-011, UC-012, UC-013) - WebSocket =====
 func handleChat() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mangahub chat join")
+		fmt.Println("Usage:")
+		fmt.Println("  mangahub chat join [room]       - Join a chat room (default: general)")
+		fmt.Println("  mangahub chat rooms             - List available rooms")
 		os.Exit(1)
 	}
-
-	requireAuth()
 
 	switch os.Args[2] {
 	case "join":
 		cmdChatJoin()
+	case "rooms":
+		cmdChatRooms()
+	default:
+		fmt.Println("Unknown command. Use: join, rooms")
+		os.Exit(1)
 	}
 }
 
-func cmdChatJoin() {
-	wsURL := fmt.Sprintf("ws://%s:%d/ws/chat?token=%s",
-		config.Server.Host, config.Server.HTTPPort, config.User.Token)
+func cmdChatRooms() {
+	requireAuth()
 
-	fmt.Printf("💬 Connecting to WebSocket chat server...\n")
+	url := fmt.Sprintf("http://%s:%d/stats", config.Server.Host, config.Server.HTTPPort)
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+config.User.Token)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("✗ Failed to get room list: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("✗ Server error: %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var stats map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&stats)
+
+	wsStats := stats["websocket"].(map[string]interface{})
+	rooms := wsStats["rooms"].([]interface{})
+
+	fmt.Println("📋 Active Chat Rooms:")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	if len(rooms) == 0 {
+		fmt.Println("  No active rooms")
+	} else {
+		for _, r := range rooms {
+			room := r.(map[string]interface{})
+			name := room["name"].(string)
+			clients := int(room["clients"].(float64))
+			fmt.Printf("  • %s (%d users)\n", name, clients)
+		}
+	}
+	fmt.Println()
+}
+
+func cmdChatJoin() {
+	// Get room from command line or use default
+	room := "general"
+	if len(os.Args) >= 4 {
+		room = os.Args[3]
+	}
+
+	// Get username from config or prompt
+	username := config.User.Username
+	if username == "" {
+		fmt.Print("Enter your username: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			username = strings.TrimSpace(scanner.Text())
+		}
+		if username == "" {
+			fmt.Println("✗ Username is required")
+			os.Exit(1)
+		}
+	}
+
+	// Build WebSocket URL with query parameters
+	wsURL := fmt.Sprintf("ws://%s:%d/ws?username=%s&room=%s",
+		config.Server.Host, config.Server.HTTPPort, username, room) // Tạo room nếu chưa tồn tại
+
+	// Connect to WebSocket server
+	fmt.Printf("💬 Connecting to room '%s' as '%s'...\n", room, username)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		fmt.Printf("✗ WebSocket connection failed: %v\n", err)
@@ -1007,71 +1076,131 @@ func cmdChatJoin() {
 	}
 	defer conn.Close()
 
-	fmt.Println("✓ Connected to chat successfully!")
-	fmt.Println("\n💬 Chat Room - Type your message (or /quit to exit)")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("✓ Connected to room '%s' successfully!\n", room)
+	fmt.Println("\n💬 Chat Room - Type your message and press Enter")
+	fmt.Println("   Commands: /quit to exit, /help for help")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-	// Read messages
+	// Channel for interrupt signal (Ctrl+C)
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+
+	// Channel to signal when reading is done
+	done := make(chan struct{})
+
+	// Goroutine to read messages from server
 	go func() {
+		defer close(done)
 		for {
-			_, message, err := conn.ReadMessage()
+			_, data, err := conn.ReadMessage()
 			if err != nil {
+				log.Println("Connection closed:", err)
 				return
 			}
 
+			// Parse JSON message
 			var msg map[string]interface{}
-			json.Unmarshal(message, &msg)
+			if err := json.Unmarshal(data, &msg); err != nil {
+				log.Printf("Failed to parse message: %v", err)
+				continue
+			}
 
+			// Handle history message
 			if msgType, ok := msg["type"].(string); ok && msgType == "history" {
 				if messages, ok := msg["messages"].([]interface{}); ok && len(messages) > 0 {
 					fmt.Println("📜 Recent chat history:")
 					for _, m := range messages {
 						msgData := m.(map[string]interface{})
-						username := msgData["username"].(string)
-						text := msgData["message"].(string)
-						ts := int64(msgData["timestamp"].(float64))
-						timestamp := time.Unix(ts, 0).Format("15:04")
-						fmt.Printf("[%s] %s: %s\n", timestamp, username, text)
+						displayMessage(msgData)
 					}
 					fmt.Println()
 				}
 				continue
 			}
 
-			if username, ok := msg["username"].(string); ok {
-				text, _ := msg["message"].(string)
-				ts := int64(msg["timestamp"].(float64))
-				timestamp := time.Unix(ts, 0).Format("15:04")
-				
-				if username == "System" {
-					fmt.Printf("ℹ️  [%s] %s\n", timestamp, text)
-				} else {
-					fmt.Printf("[%s] %s: %s\n", timestamp, username, text)
-				}
+			// Display regular message
+			displayMessage(msg)
+		}
+	}()
+
+	// Read input from user and send to server
+	scanner := bufio.NewScanner(os.Stdin)
+	go func() {
+		for scanner.Scan() {
+			text := strings.TrimSpace(scanner.Text())
+			if text == "" {
+				continue
+			}
+
+			// Handle commands
+			if text == "/quit" {
+				fmt.Println("\n✓ Left chat room")
+				conn.WriteMessage(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				)
+				os.Exit(0)
+			}
+
+			if text == "/help" {
+				fmt.Println("\n📖 Available Commands:")
+				fmt.Println("  /quit  - Exit the chat room")
+				fmt.Println("  /help  - Show this help message")
+				fmt.Println()
+				continue
+			}
+
+			// Create message
+			msg := map[string]interface{}{
+				"text": text,
+			}
+
+			// Marshal to JSON
+			data, err := json.Marshal(msg)
+			if err != nil {
+				log.Printf("Failed to marshal message: %v", err)
+				continue
+			}
+
+			// Send message to server
+			err = conn.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				log.Println("Write error:", err)
+				return
 			}
 		}
 	}()
 
-	// Send messages
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		text := scanner.Text()
-
-		if text == "/quit" {
-			fmt.Println("\n✓ Left chat")
-			return
+	// Wait for interrupt signal or connection close
+	select {
+	case <-done:
+		fmt.Println("\n✓ Server closed the connection")
+	case <-interrupt:
+		fmt.Println("\n\n✓ Shutting down gracefully...")
+		err := conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		)
+		if err != nil {
+			log.Println("Write close error:", err)
 		}
+	}
+}
 
-		if text == "" {
-			continue
-		}
+func displayMessage(msg map[string]interface{}) {
+	msgType, _ := msg["type"].(string)
+	username, _ := msg["username"].(string)
+	text, _ := msg["text"].(string)
+	timeStr, _ := msg["time"].(string)
 
-		msg := map[string]interface{}{
-			"type":    "chat",
-			"message": text,
-		}
-		msgData, _ := json.Marshal(msg)
-		conn.WriteMessage(websocket.TextMessage, msgData)
+	switch msgType {
+	case "chat":
+		fmt.Printf("[%s] %s: %s\n", timeStr, username, text)
+	case "system":
+		fmt.Printf("[%s] * %s\n", timeStr, text)
+	default:
+		// Fallback for any message format
+		fmt.Printf("[%s] %s: %s\n", timeStr, username, text)
 	}
 }
 
@@ -1297,7 +1426,7 @@ func cmdServerStatus() {
 
 func cmdServerPing() {
 	fmt.Println("🏓 Pinging all server protocols...\n")
-	
+
 	baseURL := fmt.Sprintf("http://%s:%d", config.Server.Host, config.Server.HTTPPort)
 
 	start := time.Now()

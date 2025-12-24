@@ -330,17 +330,40 @@ go run cmd/grpc-server/main.go
 ### WebSocket Chat Commands
 
 ```bash
-# Join chat room
+# Join default chat room (general)
 ./mangahub chat join
+
+# Join specific chat room
+./mangahub chat join <room-name>
+
+# List active chat rooms
+./mangahub chat rooms
 ```
 
-**Example:**
+**Examples:**
 ```bash
-# After joining, simply type messages and press Enter
+# Join general room
 ./mangahub chat join
-> Hello everyone!
-> Type /quit to exit
+
+# Join specific room
+./mangahub chat join manga-discussion
+./mangahub chat join anime-fans
+
+# List all active rooms
+./mangahub chat rooms
+
+# In chat, use these commands:
+# - Type your message and press Enter to send
+# - /help - Show available commands
+# - /quit - Exit the chat room
 ```
+
+**Features:**
+- 🏠 Multiple chat rooms support
+- 📜 Chat history for new joiners
+- 👥 See who joins/leaves the room
+- 💬 Real-time message delivery
+- 🔒 Each room is isolated
 
 ### gRPC Operations Commands
 
@@ -609,6 +632,22 @@ go run cmd/server/main.go
 ./mangahub notify send --manga-id demon-slayer --chapter 205
 
 # Terminal 1 will receive the notification
+```
+
+### WebSocket Chat Workflow
+
+```bash
+# Terminal 1: Join manga-discussion room
+./mangahub chat join manga-discussion
+
+# Terminal 2: Join the same room
+./mangahub chat join manga-discussion
+
+# Both terminals can now chat in real-time!
+# Try sending messages from either terminal
+
+# Terminal 3: List active rooms and see users
+./mangahub chat rooms
 ```
 
 ## Project Structure

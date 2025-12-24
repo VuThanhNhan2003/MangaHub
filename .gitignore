@@ -4,3 +4,5 @@
 *.sqlite3
 /data/*.json
 /docs
+/Task3
+test_*.md

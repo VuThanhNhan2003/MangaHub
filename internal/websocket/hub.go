@@ -11,7 +11,7 @@ import (
 )
 
 // WebSocket hub implementation for managing chat rooms and clients
-// Workflow: client -> hub -> room -> clients 
+// Workflow: cli or client -> main -> ServeWs -> Client.readPump -> Hub.broadcastToRoom -> Client.writePump
 
 const (
 	writeWait      = 10 * time.Second

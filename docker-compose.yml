@@ -10,7 +10,7 @@ services:
       - "9091:9091/udp"   # UDP
       - "9092:9092"       # gRPC
     environment:
-      PORT: 8080
+      HTTP_PORT: ":8080"
       DB_PATH: /app/data/mangahub.db
       TCP_PORT: ":9090"
       UDP_PORT: ":9091"

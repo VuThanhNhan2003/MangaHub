@@ -354,7 +354,7 @@ func handleAuth() {
 	switch os.Args[2] {
 	case "register":
 		cmdAuthRegister() // UC-001: User Registration
-	case "login": 
+	case "login":
 		cmdAuthLogin() // UC-002: User Authentication
 	case "logout": // Simple logout by clearing token
 		config.User = struct {
@@ -778,12 +778,12 @@ func cmdLibraryAdd() {
 }
 
 func cmdLibraryRemove() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: mangahub library remove <manga-id>")
+	mangaID := getFlag("--manga-id")
+
+	if mangaID == "" {
+		fmt.Println("Usage: mangahub library remove --manga-id <id>")
 		os.Exit(1)
 	}
-
-	mangaID := os.Args[3]
 
 	fmt.Printf("📚 Removing manga from library via HTTP...\n")
 	_, err := makeRequest("DELETE", "/library/"+mangaID, nil, config.User.Token)

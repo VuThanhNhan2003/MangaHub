@@ -233,8 +233,8 @@ go run cmd/grpc-server/main.go
 
 **Examples:**
 ```bash
-./mangahub manga search "One Piece"
-./mangahub manga info one-piece
+./mangahub manga search naruto
+./mangahub manga info naruto
 ./mangahub manga search "Naruto" --use-grpc
 ```
 

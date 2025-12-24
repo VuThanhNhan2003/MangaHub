@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrMangaNotFound = errors.New("manga not found")
+	ErrMangaNotFound    = errors.New("manga not found")
 	ErrProgressNotFound = errors.New("progress not found")
 )
 
@@ -88,7 +88,7 @@ func (r *Repository) Search(query, genre, status string, limit, offset int) ([]*
 func (r *Repository) GetByID(id string) (*models.Manga, error) {
 	manga := &models.Manga{}
 	query := `SELECT id, title, author, genres, status, total_chapters, description, cover_url, year 
-			  FROM manga WHERE id = ?`
+			  FROM manga WHERE LOWER(id) = LOWER(?)`
 	err := r.db.QueryRow(query, id).Scan(
 		&manga.ID,
 		&manga.Title,
@@ -184,7 +184,7 @@ func (r *Repository) UpdateProgress(userID, mangaID string, chapter int) error {
 	query := `
 		UPDATE user_progress 
 		SET current_chapter = ?, updated_at = ?
-		WHERE user_id = ? AND manga_id = ?
+		WHERE user_id = ? AND LOWER(manga_id) = LOWER(?)
 	`
 	result, err := r.db.Exec(query, chapter, time.Now(), userID, mangaID)
 	if err != nil {
@@ -208,7 +208,7 @@ func (r *Repository) GetProgress(userID, mangaID string) (*models.UserProgress, 
 	query := `
 		SELECT user_id, manga_id, current_chapter, status, rating, updated_at, started_at
 		FROM user_progress
-		WHERE user_id = ? AND manga_id = ?
+		WHERE user_id = ? AND LOWER(manga_id) = LOWER(?)
 	`
 	err := r.db.QueryRow(query, userID, mangaID).Scan(
 		&progress.UserID,
@@ -230,7 +230,7 @@ func (r *Repository) GetProgress(userID, mangaID string) (*models.UserProgress, 
 
 // RemoveFromLibrary removes manga from user's library
 func (r *Repository) RemoveFromLibrary(userID, mangaID string) error {
-	query := `DELETE FROM user_progress WHERE user_id = ? AND manga_id = ?`
+	query := `DELETE FROM user_progress WHERE user_id = ? AND LOWER(manga_id) = LOWER(?)`
 	result, err := r.db.Exec(query, userID, mangaID)
 	if err != nil {
 		return fmt.Errorf("failed to remove from library: %w", err)

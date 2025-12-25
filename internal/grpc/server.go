@@ -7,21 +7,25 @@ import (
 	"time"
 
 	"mangahub/internal/manga"
+	"mangahub/pkg/models"
 	pb "mangahub/proto/proto"
+	"net"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"net"
 )
 
 type Server struct {
 	pb.UnimplementedMangaServiceServer
-	repo *manga.Repository
+	repo              *manga.Repository
+	progressBroadcast chan models.ProgressUpdate
 }
 
-func NewServer(repo *manga.Repository) *Server {
+func NewServer(repo *manga.Repository, progressBroadcast chan models.ProgressUpdate) *Server {
 	return &Server{
-		repo: repo,
+		repo:              repo,
+		progressBroadcast: progressBroadcast,
 	}
 }
 
@@ -128,6 +132,20 @@ func (s *Server) UpdateProgress(ctx context.Context, req *pb.UpdateProgressReque
 		return nil, status.Error(codes.Internal, "failed to update progress")
 	}
 
+	// Broadcast progress update via TCP (non-blocking)
+	if s.progressBroadcast != nil {
+		update := models.ProgressUpdate{
+			UserID:    req.UserId,
+			MangaID:   req.MangaId,
+			Chapter:   int(req.Chapter),
+			Timestamp: time.Now().Unix(),
+		}
+		select {
+		case s.progressBroadcast <- update:
+		default:
+		}
+	}
+
 	return &pb.UpdateProgressResponse{
 		Success:        true,
 		Message:        "progress updated successfully",
@@ -137,22 +155,22 @@ func (s *Server) UpdateProgress(ctx context.Context, req *pb.UpdateProgressReque
 }
 
 // StartGRPCServer starts the gRPC server
-func StartGRPCServer(port string, repo *manga.Repository) error {
-    // Tạo TCP listener
-    lis, err := net.Listen("tcp", ":"+port)
-    if err != nil {
-        return err
-    }
+func StartGRPCServer(port string, repo *manga.Repository, progressBroadcast chan models.ProgressUpdate) error {
+	// Tạo TCP listener
+	lis, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return err
+	}
 
-    // Tạo gRPC server
-    grpcServer := grpc.NewServer()
+	// Tạo gRPC server
+	grpcServer := grpc.NewServer()
 
-    // Khởi tạo server và đăng ký service
-    srv := NewServer(repo)
-    pb.RegisterMangaServiceServer(grpcServer, srv)
+	// Khởi tạo server và đăng ký service
+	srv := NewServer(repo, progressBroadcast)
+	pb.RegisterMangaServiceServer(grpcServer, srv)
 
-    log.Printf("gRPC server listening on %s", port)
+	log.Printf("gRPC server listening on %s", port)
 
-    // Chạy server
-    return grpcServer.Serve(lis)
+	// Chạy server
+	return grpcServer.Serve(lis)
 }

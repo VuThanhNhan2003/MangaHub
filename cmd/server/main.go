@@ -42,7 +42,7 @@ func main() {
 	grpcPort := getEnv("GRPC_PORT", ":9092")
 
 	log.Println("╔════════════════════════════════════════════════════════════╗")
-	log.Println("║           🚀 MangaHub Server Suite Starting...            ║")
+	log.Println("║           MangaHub Server Suite Starting...            ║")
 	log.Println("╚════════════════════════════════════════════════════════════╝")
 
 	// Ensure data directory exists
